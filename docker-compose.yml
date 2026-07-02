@@ -1,0 +1,11 @@
+services:
+  pihole-monitor:
+    build: .
+    container_name: pihole-monitor
+    ports:
+      - "8888:8888"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
