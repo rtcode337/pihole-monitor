@@ -14,6 +14,7 @@ def get_claude_token():
 
 
 def save_claude_token(token):
+    os.makedirs(os.path.dirname(CLAUDE_TOKEN_PATH), exist_ok=True)
     fd = os.open(CLAUDE_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(token.strip())
