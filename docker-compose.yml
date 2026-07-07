@@ -8,4 +8,6 @@ services:
       - .env
     volumes:
       - ./data:/data
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
     restart: unless-stopped
