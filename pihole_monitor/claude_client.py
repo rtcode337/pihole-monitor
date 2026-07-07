@@ -55,9 +55,9 @@ def ask_claude_about_domain(domain):
             env=env,
         )
         if result.returncode != 0:
-            err = result.stderr.strip() or "claude command failed"
-            print(f"[ask-claude] returncode={result.returncode} stderr={err!r} stdout={result.stdout.strip()!r}")
-            if is_auth_error(err):
+            err = result.stderr.strip() or result.stdout.strip() or "claude command failed"
+            print(f"[ask-claude] returncode={result.returncode} stderr={result.stderr.strip()!r} stdout={result.stdout.strip()!r}")
+            if is_auth_error(result.stdout) or is_auth_error(result.stderr):
                 clear_claude_token()
                 return None, "token_required"
             return None, err
