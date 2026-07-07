@@ -12,6 +12,20 @@ PIHOLE_PASSWORD = os.environ.get("PIHOLE_PASSWORD", "")
 PIHOLE_QUERY_LIMIT = int(os.environ.get("PIHOLE_QUERY_LIMIT", "-1"))
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "60"))
 DB_PATH = "/data/monitor.db"
+CLAUDE_TOKEN_PATH = "/data/claude_token"
+
+AUTH_ERROR_KEYWORDS = (
+    "invalid api key",
+    "invalid bearer token",
+    "authentication_error",
+    "unauthorized",
+    "please run",
+    "/login",
+    "oauth token has expired",
+    "token has expired",
+    "token expired",
+    "401",
+)
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -80,24 +94,57 @@ def mark_as_reviewed(domain, note=""):
     conn.commit()
     conn.close()
 
+def get_claude_token():
+    try:
+        with open(CLAUDE_TOKEN_PATH, "r") as f:
+            token = f.read().strip()
+            return token or None
+    except FileNotFoundError:
+        return None
+
+def save_claude_token(token):
+    fd = os.open(CLAUDE_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token.strip())
+
+def clear_claude_token():
+    try:
+        os.remove(CLAUDE_TOKEN_PATH)
+    except FileNotFoundError:
+        pass
+
+def is_auth_error(stderr_text):
+    lowered = stderr_text.lower()
+    return any(kw in lowered for kw in AUTH_ERROR_KEYWORDS)
+
 def ask_claude_about_domain(domain):
     """Queries the headless Claude Code CLI for a plain-language explanation of a blocked domain.
-    Returns (answer, error)."""
+    Returns (answer, error). error == "token_required" means the caller should prompt the user
+    for a fresh `claude setup-token` value."""
+    token = get_claude_token()
+    if not token:
+        return None, "token_required"
+
     prompt = (
         f"Pi-holeの広告/トラッキングブロックリストによってブロックされたドメイン「{domain}」について、"
         f"これがどのようなサービス・通信に関連するドメインで、なぜブロックリストに含まれている可能性が高いかを"
         f"日本語で3〜5行程度で簡潔に説明してください。"
     )
+    env = dict(os.environ, CLAUDE_CODE_OAUTH_TOKEN=token)
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--output-format", "text"],
             capture_output=True,
             text=True,
             timeout=CLAUDE_TIMEOUT,
+            env=env,
         )
         if result.returncode != 0:
             err = result.stderr.strip() or "claude command failed"
             print(f"[ask-claude] returncode={result.returncode} stderr={err!r} stdout={result.stdout.strip()!r}")
+            if is_auth_error(err):
+                clear_claude_token()
+                return None, "token_required"
             return None, err
         answer = result.stdout.strip()
         if not answer:
@@ -363,6 +410,12 @@ HTML = """
     color: #f85149;
   }
 
+  .claude-modal-body code {
+    background: #21262d;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
   .edit-note-btn {
     border: 1px solid #30363d;
     background: transparent;
@@ -562,6 +615,22 @@ HTML = """
   </div>
 </div>
 
+<div class="modal-overlay" id="token-modal" style="display:none" onclick="onTokenOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">Claude認証が必要です</div>
+    <div class="claude-modal-body">
+      トークンが未設定か、期限切れの可能性があります。<br><br>
+      ブラウザやターミナルが使える端末で以下を実行し、表示されたトークンをそのまま貼り付けてください。<br><br>
+      <code>claude setup-token</code>
+    </div>
+    <textarea id="token-input" class="modal-note" placeholder="ここにトークンを貼り付け"></textarea>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeTokenModal()">キャンセル</button>
+      <button class="action-btn confirm-btn" onclick="submitClaudeToken()">保存して実行</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const COPY_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 const CHECK_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
@@ -697,6 +766,9 @@ async function askClaude(domain) {
     if (result.success) {
       body.textContent = result.answer;
       body.className = 'claude-modal-body';
+    } else if (result.error === 'token_required') {
+      closeClaudeModal();
+      openTokenModal(domain);
     } else {
       body.textContent = `Claudeへの問い合わせに失敗しました（${result.error || '不明なエラー'}）`;
       body.className = 'claude-modal-body error-text';
@@ -704,6 +776,47 @@ async function askClaude(domain) {
   } catch(e) {
     body.textContent = 'Claudeへの問い合わせに失敗しました';
     body.className = 'claude-modal-body error-text';
+  }
+}
+
+let tokenPendingDomain = null;
+
+function openTokenModal(domain) {
+  tokenPendingDomain = domain;
+  document.getElementById('token-input').value = '';
+  document.getElementById('token-modal').style.display = 'flex';
+  document.getElementById('token-input').focus();
+}
+
+function closeTokenModal() {
+  document.getElementById('token-modal').style.display = 'none';
+  tokenPendingDomain = null;
+}
+
+function onTokenOverlayClick(event) {
+  if (event.target === document.getElementById('token-modal')) closeTokenModal();
+}
+
+async function submitClaudeToken() {
+  const token = document.getElementById('token-input').value.trim();
+  if (!token) return;
+  const domain = tokenPendingDomain;
+  try {
+    const resp = await fetch('/api/claude-token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      closeTokenModal();
+      showToast('トークンを保存しました', 'success');
+      if (domain) askClaude(domain);
+    } else {
+      showToast('トークンの保存に失敗しました', 'error');
+    }
+  } catch(e) {
+    showToast('エラーが発生しました', 'error');
   }
 }
 
@@ -799,10 +912,11 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeClaudeModal(); }
+  if (e.key === 'Escape') { closeModal(); closeClaudeModal(); closeTokenModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitReview();
     if (document.getElementById('claude-modal').style.display !== 'none') submitReviewFromClaudeModal();
+    if (document.getElementById('token-modal').style.display !== 'none') submitClaudeToken();
   }
 });
 
@@ -865,8 +979,17 @@ def api_ask_claude():
         return jsonify({"success": False, "error": "domain required"}), 400
     answer, error = ask_claude_about_domain(domain)
     if error:
-        return jsonify({"success": False, "error": error}), 502
+        status = 401 if error == "token_required" else 502
+        return jsonify({"success": False, "error": error}), status
     return jsonify({"success": True, "answer": answer})
+
+@app.route("/api/claude-token", methods=["POST"])
+def api_claude_token():
+    token = (request.json or {}).get("token", "").strip()
+    if not token:
+        return jsonify({"success": False, "error": "token required"}), 400
+    save_claude_token(token)
+    return jsonify({"success": True})
 
 if __name__ == "__main__":
     init_db()

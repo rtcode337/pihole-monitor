@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Bash(git commit *)",
+            "statusMessage": "個人情報混入チェック中...",
+            "timeout": 90,
+            "prompt": "A git commit is about to run in this repository: $ARGUMENTS\n\nBefore allowing it, check two things. Use judgment, not just exact string matching.\n\n1. Author/committer identity — run `git config user.name` and `git config user.email`. The only allowed identity for this repository is name \"Claude\" and email \"noreply@anthropic.com\". If either value is anything else (e.g. a real personal name or a personal email address), this check fails.\n\n2. Personal information in the change — run `git diff --cached` and inspect the actual content being committed for personal information that should not end up in this repository: email addresses (other than noreply@anthropic.com), phone numbers, full personal names, home/mailing addresses, or IP addresses tied to someone's private network or home. Use semantic judgment — a variable or parameter named like `user_email` in source code is fine, an actual email address string, phone number, name, or address is not.\n\nIf either check fails, block the commit: clearly state which check failed and quote the specific value/line that triggered it, so the user can fix it before retrying. If both checks are clean, allow the commit to proceed."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -61,8 +61,10 @@ reviewed_domains (
 
 サーバー側で `claude -p "<プロンプト>" --output-format text` をsubprocessでヘッドレス実行し、標準出力を回答として返す。
 
-- 認証はAPIキーではなく、`docker-compose.yml`でホストの`~/.claude`・`~/.claude.json`をコンテナにマウントして共有する方式（サブスクリプション利用枠を消費、従量課金なし）
-- ホスト側の認証が切れている場合はこの機能も失敗する。ホスト側で`claude`に再ログインすればマウント経由で反映される
+- 認証は`claude setup-token`で発行した長期OAuthトークンを使う方式。ホストの`~/.claude`はマウントしない
+- トークンは`/data/claude_token`（`./data`は永続化ボリューム、パーミッション600）にプレーンテキストで保存し、subprocess実行時に`CLAUDE_CODE_OAUTH_TOKEN`環境変数として渡す（`get_claude_token` / `save_claude_token` / `clear_claude_token`）
+- トークンが未保存、または`claude`コマンドの標準エラーが認証エラーらしき内容（`AUTH_ERROR_KEYWORDS`でキーワード判定）の場合、`/api/ask-claude`は`{"success": false, "error": "token_required"}`（HTTP 401）を返す。判定に該当した場合は保存済みトークンも削除する
+- フロントエンドは`error === "token_required"`を受け取ると、Claudeモーダルの代わりにトークン入力モーダル（`token-modal`）を開く。ユーザーが手元の端末で`claude setup-token`を実行して得たトークンを貼り付けると`POST /api/claude-token`で保存し、保存成功後に同じドメインで`askClaude()`を自動的に再実行する
 - タイムアウトは`CLAUDE_TIMEOUT`環境変数で制御（デフォルト60秒）
 - コンテナには`Dockerfile`でNode.js + `@anthropic-ai/claude-code`をインストールしている
 
@@ -95,4 +97,4 @@ docker compose up -d --build
 - リクエストごとにトークンを取得しているため、Pi-holeへのAPIコールが多い（認証1回＋データ取得で計2回/リクエスト）
 - ブロック済みクエリの取得件数は`PIHOLE_QUERY_LIMIT`環境変数で制御（デフォルト`-1`で全件）。Pi-hole v6 APIのパラメータ名は`length`でデフォルト100件
 - 確認済み状態はローカルDBのみで管理。Pi-holeを再インストールしても確認済み情報は維持される
-- Claude連携はホストの認証情報をコンテナと共有する設計のため、ホストとコンテナで同じClaudeアカウントの利用枠を消費する
+- `claude setup-token`で発行されるトークンは長期間有効（発行時点の仕様では約1年）。期限切れ時は認証エラーを検知してトークンを破棄し、次回のClaudeボタン押下時に再入力を促す

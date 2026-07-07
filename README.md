@@ -41,9 +41,12 @@ docker compose up -d --build
 
 「Claudeに聞く」機能は、コンテナ内にインストールしたClaude Code CLI (`claude`) をヘッドレス（`claude -p ... --output-format text`）で呼び出す。
 
-課金される従量課金APIキーではなく、**ホストマシンで認証済みのClaude Codeのサブスクリプション（`~/.claude`・`~/.claude.json`）をコンテナにそのままマウントして共有**する方式を取っている（`docker-compose.yml`）。そのため、ホスト側でClaude Codeにログイン済みであれば追加の認証作業なしに動作する。
+課金される従量課金APIキーではなく、**`claude setup-token` で発行した長期OAuthトークン**を使う方式を取っている。ホストの`~/.claude`はマウントしない。
 
-ホスト側の認証が切れている場合、「Claudeに聞く」は失敗する。その場合はホスト側で `claude` にログインし直せば、マウント経由でコンテナ側にも反映される。
+- トークンが未設定、または期限切れの場合、「Claude」ボタンを押すとトークン入力ダイアログが表示される
+- 表示されるメッセージに従い、ブラウザやターミナルが使える別の端末で `claude setup-token` を実行し、表示されたトークンをダイアログに貼り付けて保存する
+- 保存されたトークンは `data/claude_token` に保存され、以後はそのトークンで自動的にClaude連携が動作する
+- トークンが期限切れ等で認証エラーになった場合は自動的に破棄され、次回の「Claude」ボタン押下時に再度入力ダイアログが表示される
 
 ## ファイル構成
 
@@ -52,8 +55,9 @@ pihole-monitor/
   app.py              # FlaskアプリとHTML/JSをすべて含む単一ファイル
   Dockerfile
   docker-compose.yml
-  data/               # SQLiteのDBが保存される（コンテナ外に永続化・起動時に自動生成、gitignore対象）
+  data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成、gitignore対象）
     monitor.db
+    claude_token
 ```
 
 技術的な詳細（APIエンドポイント、DBスキーマ、フロントエンド構成など）は [CLAUDE.md](CLAUDE.md) を参照。
@@ -63,4 +67,4 @@ pihole-monitor/
 - Pi-hole v6 API前提。v5以前はAPIが異なるため動作しない
 - リクエストごとにPi-holeの認証トークンを取得しているため、Pi-holeへのAPIコールが多い
 - 確認済み状態はローカルDBのみで管理。Pi-holeを再インストールしても確認済み情報は維持される
-- Claude連携はホストの認証情報をコンテナと共有する設計のため、ホストとコンテナで同じClaudeアカウントの利用枠を消費する
+- `claude setup-token` のトークンは長期間有効（発行時点の仕様では約1年）だが、失効した場合は次回の問い合わせ時に再入力が必要になる
