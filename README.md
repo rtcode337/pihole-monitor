@@ -35,7 +35,7 @@ docker compose up -d --build
 
 アクセス: `http://ホストのIP:8888`
 
-`app.py` はビルド時にDockerイメージへコピーされる（ボリュームマウントではない）ため、`app.py` を変更したあとは `docker compose restart` ではなく **`docker compose up -d --build`** で再ビルドする必要がある。
+`app.py` と `pihole_monitor/` はビルド時にDockerイメージへコピーされる（ボリュームマウントではない）ため、コードを変更したあとは `docker compose restart` ではなく **`docker compose up -d --build`** で再ビルドする必要がある。
 
 ## Claude連携について
 
@@ -52,7 +52,19 @@ docker compose up -d --build
 
 ```
 pihole-monitor/
-  app.py              # FlaskアプリとHTML/JSをすべて含む単一ファイル
+  app.py                        # エントリーポイント
+  requirements.txt
+  pihole_monitor/               # Flaskアプリ本体（機能ごとにモジュール分割）
+    __init__.py
+    config.py
+    db.py
+    pihole_client.py
+    claude_client.py
+    pages.py
+    api.py
+    templates/index.html
+    static/css/style.css
+    static/js/app.js
   Dockerfile
   docker-compose.yml
   data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成、gitignore対象）

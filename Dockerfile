@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     apt-get purge -y curl && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install flask requests --no-cache-dir
+COPY requirements.txt .
+RUN pip install -r requirements.txt --no-cache-dir
 
 COPY app.py .
+COPY pihole_monitor/ ./pihole_monitor/
 
 CMD ["python", "app.py"]

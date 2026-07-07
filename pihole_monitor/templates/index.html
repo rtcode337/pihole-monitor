@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pi-hole Monitor</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header>
+  <div class="logo"></div>
+  <h1>Pi-hole <span>Monitor</span></h1>
+</header>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-value alert" id="stat-new">-</div>
+    <div class="stat-label">未確認</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value ok" id="stat-reviewed">-</div>
+    <div class="stat-label">確認済み</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" id="stat-total">-</div>
+    <div class="stat-label">ブロック総数</div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button class="filter-btn active" onclick="setFilter('new', event)">未確認のみ</button>
+  <button class="filter-btn" onclick="setFilter('reviewed', event)">確認済みのみ</button>
+  <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
+  <button class="refresh-btn" onclick="loadDomains()">更新</button>
+</div>
+
+<div class="domain-list" id="domain-list">
+  <div class="loading">読み込み中...</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="modal" style="display:none" onclick="onOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">確認済みにする</div>
+    <div class="modal-domain" id="modal-domain"></div>
+    <textarea id="modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeModal()">キャンセル</button>
+      <button class="action-btn confirm-btn" onclick="submitReview()">確認済みにする</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="claude-modal" style="display:none" onclick="onClaudeOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">Claudeに聞く</div>
+    <div class="modal-domain" id="claude-modal-domain"></div>
+    <div class="claude-modal-body" id="claude-modal-body"></div>
+    <textarea id="claude-modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeClaudeModal()">閉じる</button>
+      <button class="action-btn confirm-btn" onclick="submitReviewFromClaudeModal()">確認済みにする</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="token-modal" style="display:none" onclick="onTokenOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">Claude認証が必要です</div>
+    <div class="claude-modal-body">
+      トークンが未設定か、期限切れの可能性があります。<br><br>
+      ブラウザやターミナルが使える端末で以下を実行し、表示されたトークンをそのまま貼り付けてください。<br><br>
+      <code>claude setup-token</code>
+    </div>
+    <textarea id="token-input" class="modal-note" placeholder="ここにトークンを貼り付け"></textarea>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeTokenModal()">キャンセル</button>
+      <button class="action-btn confirm-btn" onclick="submitClaudeToken()">保存して実行</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
