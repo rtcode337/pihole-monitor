@@ -10,6 +10,7 @@ Pi-holeの設定（ホワイトリスト等）は一切変更せず、確認状�
 - 各ドメインについて「Claudeに聞く」ボタンから、サーバー側のClaude Code CLI（ヘッドレス）に問い合わせて、そのドメインが何のためにブロックされていそうかの説明を取得できる
 - Claudeの回答を見ながら、そのままダイアログ内でメモを書いて確認済みにできる
 - Pi-holeへの接続・APIアクセスに失敗した場合は、その旨を画面に表示する
+- スマホのホーム画面に追加すると、アドレスバーなしの単独ウィンドウで開く（アイコン付き）
 
 ## セットアップ
 
@@ -115,7 +116,9 @@ pihole-monitor/
     claude.rs         # Claude CLI連携・トークン管理
     api.rs            # /api/* のJSONエンドポイント
     pages.rs          # 画面の配信（HTML/CSS/JSを埋め込み）
-  static/             # 画面。index.html / css/style.css / js/app.js
+  static/             # 画面（index.html / css / js）とアイコン・マニフェスト
+  scripts/
+    gen_icons.py      # アイコンのPNGを static/icon.svg から生成（Python標準ライブラリのみ）
   Dockerfile
   docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
   docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）

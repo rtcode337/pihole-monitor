@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Pi-hole Monitor">
+  <!-- 「監視」を表す目。瞳は画面ヘッダーの赤いドット(.logo)と同じ #f85149 で揃えている。
+       図形を変えたら scripts/gen_icons.py の定数も同じ値に直し、PNGを作り直すこと。 -->
+  <defs>
+    <radialGradient id="pupil-glow">
+      <stop offset="0" stop-color="#f85149" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#f85149" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" fill="#0d1117"/>
+  <circle cx="32" cy="32" r="14" fill="url(#pupil-glow)"/>
+  <!-- まぶた: 半径24.375の円弧2本で作るレンズ形(幅42 × 高さ24) -->
+  <path d="M11 32 A24.375 24.375 0 0 1 53 32 A24.375 24.375 0 0 1 11 32 Z"
+        fill="none" stroke="#c9d1d9" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7.5" fill="#f85149"/>
+</svg>

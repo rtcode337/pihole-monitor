@@ -19,11 +19,16 @@ pihole-monitor/
     pihole.rs                    # Pi-hole v6 API連携
     claude.rs                    # Claude CLI連携・トークン管理
     api.rs                       # /api/* のJSONエンドポイント + AppState
-    pages.rs                     # 画面の配信（HTML/CSS/JSを実行ファイルに埋め込み）
-  static/                      # 画面。ビルド時に include_str! で埋め込まれる
+    pages.rs                     # 画面・アイコンの配信（実行ファイルに埋め込み）
+  static/                      # 画面とアイコン。ビルド時に実行ファイルへ埋め込まれる
     index.html                   # HTML骨格（テンプレートエンジンは使っていない）
     css/style.css                # 全スタイル
     js/app.js                    # フロントエンドの全ロジック（vanilla JS + fetch）
+    icon.svg                     # アイコン（目のモチーフ）の原本
+    icon-32/180/192/512.png      # icon.svgから生成。gen_icons.pyの出力なので手で編集しない
+    manifest.webmanifest         # ホーム画面に追加したときの名前・アイコン・表示モード
+  scripts/
+    gen_icons.py                 # icon.svgと同じ図形を描いてPNGを書き出す（依存なし）
   Dockerfile                   # マルチステージ（rust:slim でビルド → node:slim で実行）
   .dockerignore                # .env・data・target・.git等をビルドコンテキストから除外
   docker-compose.yml           # 通常用（GHCRのイメージをpull。手元ビルドも可）
@@ -45,6 +50,7 @@ pihole-monitor/
 | UIの見た目（色・余白など）を変える | `static/css/style.css` |
 | フロントエンドの挙動（フィルター・モーダル制御など）を変える | `static/js/app.js` |
 | 画面のHTML構造・モーダルの追加を変える | `static/index.html` |
+| アイコン（ファビコン・ホーム画面）を変える | `static/icon.svg` + `scripts/gen_icons.py` |
 | Pi-hole APIとのやり取り（認証・クエリ取得）を変える | `src/pihole.rs` |
 | Claude CLI連携・トークン管理を変える | `src/claude.rs` |
 | 確認済みドメインのDB操作・スキーマを変える | `src/db.rs` |
@@ -104,6 +110,8 @@ reviewed_domains (
 |---------|------|------|
 | GET | `/` | Web UI（`static/index.html`を埋め込みから返す） |
 | GET | `/static/css/style.css` / `/static/js/app.js` | 埋め込んだCSS・JS |
+| GET | `/static/icon.svg` / `/static/icon-{32,180,192,512}.png` / `/favicon.ico` | アイコン（`/favicon.ico`は32pxのPNGを返す） |
+| GET | `/static/manifest.webmanifest` | Webアプリマニフェスト |
 | GET | `/api/domains` | ブロック済みドメイン一覧（reviewed・noteフラグ付き）。Pi-hole取得失敗時は502 + `{"error": "pihole_unavailable"}` |
 | POST/DELETE | `/api/review` | ドメインを確認済みにする（メモも保存）／未確認に戻す |
 | POST | `/api/ask-claude` | 指定ドメインについてClaude CLIに問い合わせ、ブロック理由の説明を取得 |
@@ -133,6 +141,16 @@ HTML骨格・CSS・JSをファイルごとに分離。vanilla JS + fetch APIで�
 - `openModal(domain)` / `submitReview()` - 確認済みにするモーダルの表示とPOST
 - `askClaude(domain)` / `openClaudeModal(domain)` - 「Claudeに聞く」ボタン押下時に`/api/ask-claude`へPOSTし、結果をモーダルに表示
 - `submitReviewFromClaudeModal()` - Claudeモーダル内のメモ欄から直接確認済みに登録
+
+#### アイコン（`static/icon.svg`・`scripts/gen_icons.py`）
+
+「監視」を表す目のモチーフ。背景`#0d1117`・まぶた`#c9d1d9`・瞳`#f85149`（ヘッダーの赤いドットと同色）。
+
+- **原本は`static/icon.svg`**。まぶたは半径24.375の円弧2本が作るレンズ形で、瞳はグロー付きの円
+- **PNGは`python3 scripts/gen_icons.py`で生成する**（32/180/192/512px、生成物もコミットする）。iOSのapple-touch-iconもAndroidのマニフェストもSVGを受け付けないため必要。PillowやcairosvgではなくPython標準ライブラリだけで図形を直接ラスタライズしている（依存を増やさないため）
+- **SVGとスクリプトの図形は自動同期しない**。形を変えるときは`icon.svg`と`gen_icons.py`冒頭の定数を両方直し、スクリプトを再実行すること
+- マニフェストの512pxは`purpose: "any maskable"`。Androidのマスク（中央80%の円）に収まるよう、絵柄は中心から半径22.75/32以内に収めてある
+- `<head>`のリンクは`static/index.html`にある（`icon` / `apple-touch-icon` / `manifest` / `theme-color`）
 
 ## 起動方法
 
