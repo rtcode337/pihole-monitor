@@ -25,5 +25,8 @@ services:
     env_file:
       - .env
     volumes:
+      # コンテナは非rootユーザー(uid/gid 1000)で動くので、このディレクトリも
+      # uid 1000 が書き込める必要がある。書けないとDBを開けずに起動に失敗する
+      # (`sudo chown -R 1000:1000 ./data` で直る)
       - ./data:/data
     restart: unless-stopped

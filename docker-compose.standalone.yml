@@ -26,6 +26,9 @@
 # SQLite(monitor.db)とClaudeの認証トークン(claude_token)が入る。
 # 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
 # 先に作っておくのが確実。
+# コンテナは非rootユーザー(uid/gid 1000)で動くため、このディレクトリは
+# uid 1000 が書き込める所有権にしておくこと(`chown -R 1000:1000 <パス>`)。
+# 書けないとDBを開けずに起動に失敗する。
 x-data-dir: &data-dir "/path/to/pihole-monitor/data"
 
 # ---- ここだけ編集: Pi-holeへの接続とアプリの設定(.env の代わり) ----

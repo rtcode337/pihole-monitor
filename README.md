@@ -53,6 +53,10 @@ docker compose pull && docker compose up -d
 戻したいときは `.env` に `PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-1234567`
 を書いて `docker compose up -d` する。
 
+> データディレクトリ（`./data`）は、コンテナ内の非rootユーザー（uid/gid 1000）が
+> 書き込める所有権にしておくこと。書けないとDBを開けずに起動に失敗する
+> （`sudo chown -R 1000:1000 ./data`）。
+
 ### 手元のソースからビルドする場合
 
 コミット前の変更を試すときは、従来どおり手元でビルドできる（`docker compose build` は
@@ -63,7 +67,18 @@ GHCRと同じタグ名で手元のイメージを作り直す。次に `docker c
 docker compose up -d --build
 ```
 
-`app.py` と `pihole_monitor/` はビルド時にDockerイメージへコピーされる（ボリュームマウントではない）ため、コードを変更したあとは `docker compose restart` ではなく **`docker compose up -d --build`** で再ビルドする必要がある。
+`src/` と `static/` はビルド時にイメージへ焼き込まれる（ボリュームマウントではない）ため、コードを変更したあとは `docker compose restart` ではなく **`docker compose up -d --build`** で再ビルドする必要がある。CSSやJSだけを直した場合も実行ファイルに埋め込まれているので再ビルドが要る。
+
+### 開発（ホストで直接動かす）
+
+Rust（1.97以降）が入っていれば、コンテナを経由せずに動かせる。
+
+```bash
+DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo run
+```
+
+`DATA_DIR` はDBとトークンの置き場（既定は `/data`。コンテナ用の絶対パスなのでホストでは上書きする）。
+「Claudeに聞く」を試す場合は、ホスト側に `claude` コマンドが必要。
 
 ### リポジトリを置けない環境（NASのコンテナマネージャー等）
 
@@ -86,21 +101,21 @@ docker compose up -d --build
 
 ## ファイル構成
 
+サーバーはRust（axum + rusqlite）、画面はフレームワークを使わないHTML/CSS/JS。
+画面の3ファイルは実行ファイルに埋め込まれるので、配布物はバイナリ1個になる。
+
 ```
 pihole-monitor/
-  app.py                        # エントリーポイント
-  requirements.txt
-  pihole_monitor/               # Flaskアプリ本体（機能ごとにモジュール分割）
-    __init__.py
-    config.py
-    db.py
-    pihole_client.py
-    claude_client.py
-    pages.py
-    api.py
-    templates/index.html
-    static/css/style.css
-    static/js/app.js
+  Cargo.toml
+  src/
+    main.rs           # エントリーポイント（設定読み込み・ルーター組み立て）
+    config.rs         # 環境変数・定数
+    db.rs             # SQLite（reviewed_domains）
+    pihole.rs         # Pi-hole v6 API連携
+    claude.rs         # Claude CLI連携・トークン管理
+    api.rs            # /api/* のJSONエンドポイント
+    pages.rs          # 画面の配信（HTML/CSS/JSを埋め込み）
+  static/             # 画面。index.html / css/style.css / js/app.js
   Dockerfile
   docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
   docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
@@ -110,11 +125,10 @@ pihole-monitor/
     claude_token
 ```
 
-技術的な詳細（APIエンドポイント、DBスキーマ、フロントエンド構成など）は [CLAUDE.md](CLAUDE.md) を参照。
-
 ## 既知の制約・注意点
 
 - Pi-hole v6 API前提。v5以前はAPIが異なるため動作しない
 - リクエストごとにPi-holeの認証トークンを取得しているため、Pi-holeへのAPIコールが多い
 - 確認済み状態はローカルDBのみで管理。Pi-holeを再インストールしても確認済み情報は維持される
 - `claude setup-token` のトークンは長期間有効（発行時点の仕様では約1年）だが、失効した場合は次回の問い合わせ時に再入力が必要になる
+- コンテナは非rootユーザー（uid/gid 1000）で動く。データディレクトリの所有権が合っていないと起動に失敗する

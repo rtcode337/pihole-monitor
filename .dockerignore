@@ -2,5 +2,5 @@
 .github
 .env
 data/
-__pycache__/
+target/
 *.md

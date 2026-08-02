@@ -3,8 +3,11 @@
 # デプロイ先は `docker compose pull` でこのイメージを取得して動かす前提。
 # ビルドするのは linux/amd64 のみ(非公開リポジトリではActions実行時間もGHCRの
 # ストレージもプランの無料枠を消費する。arm64のネイティブランナーは公開リポジトリ
-# でないと無料枠で使えず、QEMUエミュレーションでのビルドは pip install /
+# でないと無料枠で使えず、QEMUエミュレーションでのビルドは cargo build /
 # npm install が極端に遅くなるため作らない)。
+#
+# arm64が必要になったら、QEMUではなくRustのクロスコンパイル
+# (`--target aarch64-unknown-linux-gnu`)でamd64ランナーからバイナリを作る方が速い。
 name: build-and-push-image
 
 on:
@@ -68,7 +71,8 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # pip install / npm install -g @anthropic-ai/claude-code のレイヤーを
-          # 実行間で使い回す
+          # 依存クレートのビルド(Dockerfileの空main.rsのレイヤー)と
+          # npm install -g @anthropic-ai/claude-code のレイヤーを実行間で使い回す。
+          # Cargo.toml / Cargo.lock を変えなければ、毎回のビルドは自前のクレートだけになる
           cache-from: type=gha
           cache-to: type=gha,mode=max

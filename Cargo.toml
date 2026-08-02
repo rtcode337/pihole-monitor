@@ -1,0 +1,44 @@
+[package]
+name = "pihole-monitor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+
+[dependencies]
+# Webフレームワーク。tokio + hyper の上に乗る薄いルーター
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
+
+# Pi-hole APIを叩くHTTPクライアント。
+# OpenSSLの共有ライブラリに依存しないよう native-tls ではなく rustls を使う
+# (実行イメージに libssl を入れずに済む。CA証明書はOS側のものを読むので、
+#  実行イメージには ca-certificates が要る —— Dockerfile参照)。
+# 暗号プロバイダは reqwest 既定の aws-lc-rs ではなく ring を明示的に選ぶ
+# ——aws-lc-rs のビルドには cmake が要るが、ring は cc だけで済むため
+# (ビルド環境に入れるものを減らせる)。差し替えは main.rs で install_default() している
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "query",
+    "rustls-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+# SQLite。bundled でSQLite本体をソースからビルドして同梱する
+# (実行イメージ側のlibsqlite3のバージョンに左右されない)
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# reviewed_at のタイムスタンプ生成にのみ使う
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+# 実行ファイルを小さくする。低速なディスクの機器へ配るので効きが大きい
+strip = true
+lto = true
+codegen-units = 1

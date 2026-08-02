@@ -1,20 +1,49 @@
-FROM python:3.11-slim
+# 本番用イメージ。実行に必要なのは
+#   1. Rustでビルドした実行ファイル1個(静的ファイルは include_str! で埋め込み済み)
+#   2. 「Claudeに聞く」で叩く claude コマンド(Node.js製)
+# の2つだけなので、Rustのツールチェーンは最終イメージに持ち込まない。
+#
+# ベースイメージのDebianコードネームはビルド側・実行側で揃えること(trixie)。
+# 揃っていないとglibcのバージョン差で実行ファイルが動かない。
 
-ENV PYTHONUNBUFFERED=1
+# ---- ビルド ----
+FROM rust:1.97.1-slim-trixie AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+# 先に依存だけをビルドして、レイヤーキャッシュに載せる。
+# ソースを変えただけのときに依存の再ビルドを避けるため、
+# 空のmain.rsで一度ビルドしてから本物のソースをCOPYする
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs && \
+    cargo build --release && \
+    rm -f target/release/pihole-monitor target/release/deps/pihole_monitor*
+
+COPY src/ ./src/
+COPY static/ ./static/
+RUN cargo build --release
+
+# ---- 実行 ----
+FROM node:24-trixie-slim AS runtime
+
+# ca-certificates: nodeのslimイメージには入っていないが、
+#   PIHOLE_BASE_URL を https:// にした場合にrustlsがOSの証明書ストアを読むため必要
+# claude: 「Claudeに聞く」でヘッドレス実行するCLI。
+#   認証はホストの ~/.claude ではなく /data/claude_token のOAuthトークンで行う
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
     npm install -g @anthropic-ai/claude-code && \
-    apt-get purge -y curl && apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+    npm cache clean --force
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt --no-cache-dir
+COPY --from=builder /build/target/release/pihole-monitor /usr/local/bin/pihole-monitor
 
-COPY app.py .
-COPY pihole_monitor/ ./pihole_monitor/
+# SQLiteとトークンの置き場。docker-compose.ymlでホスト側のディレクトリをマウントする。
+# nodeイメージに元からいる非rootユーザー(node, uid/gid 1000)で動かすため、
+# マウント元のディレクトリも uid 1000 が書ける必要がある
+RUN mkdir -p /data && chown node:node /data
+USER node
 
-CMD ["python", "app.py"]
+EXPOSE 6001
+
+CMD ["pihole-monitor"]
