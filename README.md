@@ -53,9 +53,9 @@ docker compose pull && docker compose up -d
 戻したいときは `.env` に `PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-1234567`
 を書いて `docker compose up -d` する。
 
-> データディレクトリ（`./data`）は、コンテナ内の非rootユーザー（uid/gid 1000）が
-> 書き込める所有権にしておくこと。書けないとDBを開けずに起動に失敗する
-> （`sudo chown -R 1000:1000 ./data`）。
+データ（`data/`）に書き込むユーザーは既定で `1000:1000`。`id -u` が 1000 以外のホストでは
+`.env` に `PIHOLE_MONITOR_UID` / `PIHOLE_MONITOR_GID` を設定する。所有者合わせは起動前に
+`pihole-monitor-init` が自動でやるので、`chown` を手で打つ必要はない。
 
 ### 手元のソースからビルドする場合
 
@@ -131,4 +131,4 @@ pihole-monitor/
 - リクエストごとにPi-holeの認証トークンを取得しているため、Pi-holeへのAPIコールが多い
 - 確認済み状態はローカルDBのみで管理。Pi-holeを再インストールしても確認済み情報は維持される
 - `claude setup-token` のトークンは長期間有効（発行時点の仕様では約1年）だが、失効した場合は次回の問い合わせ時に再入力が必要になる
-- コンテナは非rootユーザー（uid/gid 1000）で動く。データディレクトリの所有権が合っていないと起動に失敗する
+- コンテナは非rootユーザーで動く（既定 uid/gid 1000）。所有者合わせは起動前に `pihole-monitor-init` が行う

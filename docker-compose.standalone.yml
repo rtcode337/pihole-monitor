@@ -25,11 +25,15 @@
 # ---- ここだけ編集: データの置き場(ホストの絶対パス) ----
 # SQLite(monitor.db)とClaudeの認証トークン(claude_token)が入る。
 # 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
-# 先に作っておくのが確実。
-# コンテナは非rootユーザー(uid/gid 1000)で動くため、このディレクトリは
-# uid 1000 が書き込める所有権にしておくこと(`chown -R 1000:1000 <パス>`)。
-# 書けないとDBを開けずに起動に失敗する。
+# 先に作っておくのが確実。所有者合わせは起動時に pihole-monitor-init がやるので、
+# `chown` を手で打つ必要はない。
 x-data-dir: &data-dir "/path/to/pihole-monitor/data"
+
+# ---- ここだけ編集: 実行ユーザー ----
+# ホスト側でこのディレクトリを読み書きするユーザーの `id -u`:`id -g`。
+# ここが合っていないとデータディレクトリに書けず起動に失敗する
+# (ログに「DBを開けない」と出る)。イメージ内の既定は 1000:1000
+x-run-as: &run-as "1000:1000"
 
 # ---- ここだけ編集: Pi-holeへの接続とアプリの設定(.env の代わり) ----
 x-app-env: &app-env
@@ -43,7 +47,25 @@ x-app-env: &app-env
   CLAUDE_TIMEOUT: "60"
 
 services:
+  # 本体を起動する前にデータディレクトリの所有者を実行ユーザーに合わせる。
+  # マウント先がホストに無いとroot所有で作られ、非rootの本体が書けずに落ちるため。
+  # $$0 は sh に渡す位置パラメータ(composeが $ をエスケープする書き方)。
+  # これで chown 先と下の user: が同じ値を参照でき、片方だけ直す事故を防げる
+  pihole-monitor-init:
+    image: ghcr.io/rtcode337/pihole-monitor:latest
+    container_name: pihole-monitor-init
+    user: root
+    volumes:
+      - type: bind
+        source: *data-dir
+        target: /data
+    entrypoint: ["sh", "-c", 'chown -R "$$0" /data', *run-as]
+    restart: "no"
+
   pihole-monitor:
+    depends_on:
+      pihole-monitor-init:
+        condition: service_completed_successfully
     image: ghcr.io/rtcode337/pihole-monitor:latest
     container_name: pihole-monitor
     environment: *app-env
@@ -56,4 +78,5 @@ services:
       - type: bind
         source: *data-dir
         target: /data
+    user: *run-as
     restart: unless-stopped

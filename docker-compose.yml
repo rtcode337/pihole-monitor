@@ -14,7 +14,25 @@
 # `.env` もリポジトリも置けない環境(NASのコンテナマネージャー等)向けには
 # docker-compose.standalone.yml を用意している。
 services:
+  # 本体を起動する前に data/ の所有者を実行ユーザーに合わせる。
+  # bindマウント先がホストに無いとDockerがroot所有で作ってしまい、非rootの本体が
+  # 書けずに落ちる(「DBを開けない」)。rootで動いていた頃のデータを引き継ぐ場合や、
+  # バックアップから別の所有者で復元したときも、ここで揃うので手作業が要らない。
+  # 本体と同じイメージ・同じタグなので、pullもビルドも増えない(2つ目はキャッシュに当たる)
+  pihole-monitor-init:
+    image: ${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}
+    build: .
+    container_name: pihole-monitor-init
+    user: root
+    volumes:
+      - ./data:/data
+    entrypoint: ["sh", "-c", "chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
+    restart: "no"
+
   pihole-monitor:
+    depends_on:
+      pihole-monitor-init:
+        condition: service_completed_successfully
     image: ${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}
     build: .
     container_name: pihole-monitor
@@ -25,8 +43,10 @@ services:
     env_file:
       - .env
     volumes:
-      # コンテナは非rootユーザー(uid/gid 1000)で動くので、このディレクトリも
-      # uid 1000 が書き込める必要がある。書けないとDBを開けずに起動に失敗する
-      # (`sudo chown -R 1000:1000 ./data` で直る)
+      # 所有者は pihole-monitor-init が起動前に揃える
       - ./data:/data
+    # data/ に書かれるファイルをホストのユーザー所有にする。イメージ内の既定は
+    # uid/gid 1000(nodeユーザー)。`id -u` が1000以外のホストでは
+    # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
+    user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
     restart: unless-stopped
