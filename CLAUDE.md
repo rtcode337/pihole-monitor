@@ -24,7 +24,12 @@ pihole-monitor/
       css/style.css               # 全スタイル
       js/app.js                   # フロントエンドの全ロジック（vanilla JS + fetch）
   Dockerfile
-  docker-compose.yml
+  .dockerignore                # .env・data・.git等をビルドコンテキストから除外
+  docker-compose.yml           # 通常用（GHCRのイメージをpull。手元ビルドも可）
+  docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
+  .github/
+    workflows/
+      build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64のみ）
   data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成）
     monitor.db
     claude_token
@@ -114,13 +119,32 @@ HTML骨格・CSS・JSをファイルごとに分離。vanilla JS + fetch APIで�
 ## 起動方法
 
 ```bash
-# .envのPIHOLE_BASE_URLとPIHOLE_PASSWORDを環境に合わせて編集してから：
+# デプロイ先：GHCRのイメージをpullして起動（初回のみ docker login ghcr.io が必要）
+docker compose pull && docker compose up -d
+
+# 手元のソースから作り直す場合
 docker compose up -d --build
 ```
 
-アクセス: `http://ホストのIP:8888`
+アクセス: `http://ホストのIP:6001`
+
+**ポートは6001**（6000ではない）。6000はX11用に予約されており、主要ブラウザが「安全でないポート」として接続を拒否する（`ERR_UNSAFE_PORT`）。ポートを変えるときは`app.py`の`app.run(port=...)`と`docker-compose.yml`・`docker-compose.standalone.yml`の`ports`、README・本ファイルのアクセスURLを揃えること。
 
 **注意**: `app.py`と`pihole_monitor/`はビルド時にイメージへCOPYされる（ボリュームマウントではない）ため、コード変更後は`docker compose restart`ではなく`docker compose up -d --build`で再ビルドしないと反映されない。
+
+## イメージの配布（GHCR / GitHub Actions）
+
+本番の実行形態は「GHCRに置いたイメージをデプロイ先がpullして動かす」。デプロイ先ではソースからビルドしない。
+
+- **ワークフロー**: `.github/workflows/build-and-push-image.yml`
+  - トリガー: `main`へのpush（`**.md`・`.gitignore`のみの変更は除外）/ `v*` gitタグ / 手動実行
+  - `concurrency`で同一refの古い実行を打ち切る（非公開リポジトリのためActions実行時間・GHCRストレージが無料枠を消費する）
+- **公開先**: `ghcr.io/rtcode337/pihole-monitor`
+  - タグ: `latest`（mainへのpush時）/ `sha-<短縮SHA>`（毎回）/ `v*` gitタグ名
+  - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`pip install`・`npm install -g @anthropic-ai/claude-code`が極端に遅くなるため作らない（ARM機で動かす必要が出たらここを見直す）
+  - リポジトリが非公開＝パッケージも非公開。デプロイ先では`read:packages`スコープのPATで`docker login ghcr.io`が必要
+- **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定・ロールバックできる。`build: .`は手元ビルド用に残してある
+- **`docker-compose.standalone.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」にまとめてある。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
 
 ## 既知の制約・注意点
 

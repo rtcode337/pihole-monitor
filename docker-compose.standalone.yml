@@ -1,0 +1,56 @@
+# `.env` を置けず、リポジトリのクローンもできない実行環境向けの単体定義。
+# (NASのコンテナマネージャー等、管理画面にYAMLを貼り付けて起動するタイプの環境を想定)
+#
+# docker-compose.yml との違いは3点だけ:
+#   1. `${...}`・`env_file` を使わず、値をYAMLに直接書く(`.env`もシェルの環境変数も
+#      無い前提のため)
+#   2. `build: .` を持たない(ソースが手元に無いので、GHCRのイメージをpullするだけ)
+#   3. bindマウントを相対パス(./data)ではなく絶対パスで書く
+#      (管理画面から登録する環境では相対パスの基準が分かりにくいため)
+#
+# 使い方:
+#   1. 「ここだけ編集」の置き場とPi-holeの接続先を、その環境の値に書き換える
+#   2. その内容を管理画面に貼り付けて起動する
+#   3. http://<ホスト>:6001/ を開く
+#
+# 非公開リポジトリのためGHCRのパッケージも非公開。pullする前に、そのホストで
+# `read:packages` スコープのPersonal Access Tokenを使って
+# `docker login ghcr.io -u <GitHubユーザー名>` を済ませておくこと。
+#
+# 障害時は :latest ではなく :sha-xxxxxxx を指定すれば任意の時点のイメージに戻せる。
+#
+# 通常の(リポジトリを配置できる)環境では docker-compose.yml を使う
+# ——こちらは値の直書きぶん古くなりやすい。
+
+# ---- ここだけ編集: データの置き場(ホストの絶対パス) ----
+# SQLite(monitor.db)とClaudeの認証トークン(claude_token)が入る。
+# 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
+# 先に作っておくのが確実。
+x-data-dir: &data-dir "/path/to/pihole-monitor/data"
+
+# ---- ここだけ編集: Pi-holeへの接続とアプリの設定(.env の代わり) ----
+x-app-env: &app-env
+  # Pi-hole(v6)のURL。例: http://192.168.1.x:80(.env.exampleと同じ書式)
+  PIHOLE_BASE_URL: "http://pihole:80"
+  # Pi-holeの管理パスワード
+  PIHOLE_PASSWORD: ""
+  # 取得するブロッククエリの件数(-1で全件)
+  PIHOLE_QUERY_LIMIT: "-1"
+  # 「Claudeに聞く」1回あたりのタイムアウト秒数
+  CLAUDE_TIMEOUT: "60"
+
+services:
+  pihole-monitor:
+    image: ghcr.io/rtcode337/pihole-monitor:latest
+    container_name: pihole-monitor
+    environment: *app-env
+    ports:
+      # host:container。6000はブラウザが「安全でないポート」として拒否する
+      # (X11用の予約。ERR_UNSAFE_PORT)ため使えないので6001にしている。
+      # LAN内からのみ見える状態にしておくこと
+      - "6001:6001"
+    volumes:
+      - type: bind
+        source: *data-dir
+        target: /data
+    restart: unless-stopped

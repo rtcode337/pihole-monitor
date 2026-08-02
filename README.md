@@ -29,13 +29,49 @@ cp .env.example .env
 
 ## 起動
 
+イメージは GitHub Actions が main への push でビルドし、GHCR
+（`ghcr.io/rtcode337/pihole-monitor`）へ公開している（`linux/amd64` のみ）。
+デプロイ先ではソースからビルドせず、これを pull して動かす。
+
+リポジトリが非公開なのでパッケージも非公開。初回だけデプロイ先で `docker login` が要る
+（GitHubで `read:packages` スコープのPersonal Access Token（classic）を発行して使う）。
+
+```bash
+# デプロイ先で1回だけ
+echo "<Personal Access Token>" | docker login ghcr.io -u <GitHubユーザー名> --password-stdin
+
+# 初回・更新とも共通
+docker compose pull && docker compose up -d
+```
+
+アクセス: `http://ホストのIP:6001`
+
+> ポート6000ではなく6001。6000はX11用に予約されており、主要ブラウザが
+> 「安全でないポート」として接続を拒否する（`ERR_UNSAFE_PORT`）。
+
+`latest` のほかにコミットごとの `sha-<短縮ハッシュ>` タグが付く。特定のコミットに
+戻したいときは `.env` に `PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-1234567`
+を書いて `docker compose up -d` する。
+
+### 手元のソースからビルドする場合
+
+コミット前の変更を試すときは、従来どおり手元でビルドできる（`docker compose build` は
+GHCRと同じタグ名で手元のイメージを作り直す。次に `docker compose pull` するとGHCR側の
+イメージで上書きされる）。
+
 ```bash
 docker compose up -d --build
 ```
 
-アクセス: `http://ホストのIP:8888`
-
 `app.py` と `pihole_monitor/` はビルド時にDockerイメージへコピーされる（ボリュームマウントではない）ため、コードを変更したあとは `docker compose restart` ではなく **`docker compose up -d --build`** で再ビルドする必要がある。
+
+### リポジトリを置けない環境（NASのコンテナマネージャー等）
+
+`.env` もクローンも置けず、管理画面にYAMLを貼り付けて起動するタイプの環境向けに
+[docker-compose.standalone.yml](docker-compose.standalone.yml) を用意している。
+`${...}`・`env_file` を使わず値を直書きし、`build:` を持たず、データの置き場を絶対パスで
+書いたもの。冒頭の「ここだけ編集」——データディレクトリの絶対パスとPi-holeの接続先——を
+書き換えて貼り付ければ起動する。
 
 ## Claude連携について
 
@@ -66,7 +102,9 @@ pihole-monitor/
     static/css/style.css
     static/js/app.js
   Dockerfile
-  docker-compose.yml
+  docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
+  docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
+  .github/workflows/build-and-push-image.yml  # イメージをビルドしてGHCRへpush
   data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成、gitignore対象）
     monitor.db
     claude_token

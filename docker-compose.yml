@@ -1,9 +1,27 @@
+# イメージはGitHub Actionsがmainへのpushでビルドし、GHCRへ公開する
+# (.github/workflows/build-and-push-image.yml 参照)。デプロイ先ではビルドせず
+# pullするだけでよい:
+#
+#   docker compose pull && docker compose up -d
+#
+# 非公開リポジトリのためGHCRのパッケージも非公開。事前にそのホストで
+# `docker login ghcr.io`(read:packages 権限のPAT)が必要。README参照。
+#
+# 障害時は `.env` に PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-xxxxxxx を
+# 書けば任意の時点のイメージに戻せる。
+# `build: .` は手元のソースから作り直したいとき用に残してある(`docker compose build`)。
+#
+# `.env` もリポジトリも置けない環境(NASのコンテナマネージャー等)向けには
+# docker-compose.standalone.yml を用意している。
 services:
   pihole-monitor:
+    image: ${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}
     build: .
     container_name: pihole-monitor
     ports:
-      - "8888:8888"
+      # host:container。6000はブラウザが「安全でないポート」として拒否する
+      # (X11用の予約。ERR_UNSAFE_PORT)ため使えないので6001にしている
+      - "6001:6001"
     env_file:
       - .env
     volumes:
