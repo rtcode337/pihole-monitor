@@ -50,6 +50,7 @@ jobs:
       # タグ:
       #   latest        … mainへのpush時(デプロイ先が通常追いかけるタグ)
       #   sha-<短縮SHA> … 毎回付ける固定タグ(どのコミットが動いているか後から特定できる)
+      #                   ただし**残るのは最新の 1 版だけ**(下の削除ステップ参照)
       #   v1.2.3        … `v*` タグをpushした場合のみ
       - name: イメージのタグ・ラベルを決める
         id: meta
@@ -76,3 +77,26 @@ jobs:
           # Cargo.toml / Cargo.lock を変えなければ、毎回のビルドは自前のクレートだけになる
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 古いイメージを消して最新の 1 つだけ残す。
+      #
+      # GHCR のストレージ枠は**アカウント全体で共有**（非公開リポジトリで 500MB。
+      # Actions の artifact とも共用）。超えても課金にはならず、支払い方法が無い場合は
+      # **push そのものがブロックされる**（次の月初まで）。
+      # `latest` を付け替えても前の版は `sha-` タグ付きで残り続けるため、
+      # 放っておくと push のたびに積み上がってその状態に近づく。
+      #
+      # **ロールバック用の版も消える。** タグを指定して古い版に戻す運用はできなくなるので、
+      # 1 世代前を残したくなったら min-versions-to-keep を 2 に上げる。
+      #
+      # **失敗しても握りつぶさない**（continue-on-error を付けない）。消せていないのに
+      # 成功に見えると、枠が埋まって push が止まる日まで気づけないため。
+      # GITHUB_TOKEN で権限が足りない場合は、delete:packages + read:packages を持つ PAT を
+      # シークレット GHCR_CLEANUP_TOKEN に入れれば、そちらが使われる。
+      - name: 古いイメージを削除して最新版だけ残す
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: 1
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN || secrets.GITHUB_TOKEN }}

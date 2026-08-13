@@ -7,8 +7,12 @@
 # 非公開リポジトリのためGHCRのパッケージも非公開。事前にそのホストで
 # `docker login ghcr.io`(read:packages 権限のPAT)が必要。README参照。
 #
-# 障害時は `.env` に PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-xxxxxxx を
-# 書けば任意の時点のイメージに戻せる。
+# `.env` に PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-xxxxxxx を書けば
+# 特定のイメージを指定できる。
+# ※ GHCR には**最新の 1 版しか残らない**（push のたびに古い版を消してストレージの
+#   無料枠を守っている。.github/workflows/build-and-push-image.yml）ので、
+#   過去のイメージへは戻せない。戻せるようにするなら、あちらの
+#   min-versions-to-keep を上げて残す世代を増やすこと。
 # `build: .` は手元のソースから作り直したいとき用に残してある(`docker compose build`)。
 #
 # `.env` もリポジトリも置けない環境(NASのコンテナマネージャー等)向けには
