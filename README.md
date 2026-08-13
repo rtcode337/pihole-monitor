@@ -7,7 +7,7 @@ Pi-holeの設定（ホワイトリスト等）は一切変更せず、確認状�
 
 - ブロック済みドメインの一覧表示（未確認 / 確認済み / すべて でフィルタ）
 - ドメインを確認済みにする（任意でメモを残せる）
-- 各ドメインについて「Claudeに聞く」ボタンから、サーバー側のClaude Code CLI（ヘッドレス）に問い合わせて、そのドメインが何のためにブロックされていそうかの説明を取得できる
+- 各ドメインについて「Claudeに聞く」ボタンから、Claude Code（別コンテナのCLIブリッジ経由）に問い合わせて、そのドメインが何のためにブロックされていそうかの説明を取得できる
 - Claudeの回答を見ながら、そのままダイアログ内でメモを書いて確認済みにできる
 - Pi-holeへの接続・APIアクセスに失敗した場合は、その旨を画面に表示する
 - スマホのホーム画面に追加すると、アドレスバーなしの単独ウィンドウで開く（アイコン付き）
@@ -27,6 +27,8 @@ cp .env.example .env
 | `PIHOLE_PASSWORD` | Pi-holeの管理パスワード | 空文字 |
 | `PIHOLE_QUERY_LIMIT` | 取得するブロッククエリの件数（`-1`で全件） | `-1` |
 | `CLAUDE_TIMEOUT` | Claudeへの問い合わせタイムアウト秒数 | `60` |
+| `CLAUDE_BRIDGE_URL` | CLIブリッジ（別コンテナ）のURL | `http://bridge:7013/v1` |
+| `STATE_DIR` | ブリッジと共有する設定の置き場 | `<DATA_DIR>/state` |
 
 ## 起動
 
@@ -78,8 +80,9 @@ Rust（1.97以降）が入っていれば、コンテナを経由せずに動か
 DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo run
 ```
 
-`DATA_DIR` はDBとトークンの置き場（既定は `/data`。コンテナ用の絶対パスなのでホストでは上書きする）。
-「Claudeに聞く」を試す場合は、ホスト側に `claude` コマンドが必要。
+`DATA_DIR` はDBと共有設定の置き場（既定は `/data`。コンテナ用の絶対パスなのでホストでは上書きする）。
+「Claudeに聞く」を試す場合はCLIブリッジが要る。composeの `bridge` だけ上げて
+`CLAUDE_BRIDGE_URL` をそちらへ向ける。
 
 ### リポジトリを置けない環境（NASのコンテナマネージャー等）
 
@@ -91,13 +94,17 @@ DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo 
 
 ## Claude連携について
 
-「Claudeに聞く」機能は、コンテナ内にインストールしたClaude Code CLI (`claude`) をヘッドレス（`claude -p ... --output-format text`）で呼び出す。
+「Claudeに聞く」機能は、**別コンテナのCLIブリッジ**（`bridge`。Claude Code CLIをOpenAI互換の
+`/chat/completions` に見せるサイドカー）へHTTPで頼む。**本体のイメージにCLIは入っていない** ——
+以前はnpmで同梱していて、CLIとNodeだけで150MB近くあった（アプリ本体は3MB）。
+ブリッジはホストへポートを公開しない（認証が無く、トークンも読めるため）。
 
 課金される従量課金APIキーではなく、**`claude setup-token` で発行した長期OAuthトークン**を使う方式を取っている。ホストの`~/.claude`はマウントしない。
 
 - トークンが未設定、または期限切れの場合、「Claude」ボタンを押すとトークン入力ダイアログが表示される
 - 表示されるメッセージに従い、ブラウザやターミナルが使える別の端末で `claude setup-token` を実行し、表示されたトークンをダイアログに貼り付けて保存する
-- 保存されたトークンは `data/claude_token` に保存され、以後はそのトークンで自動的にClaude連携が動作する
+- 保存されたトークンは `data/state/settings.db` に入り、ブリッジが読み取り専用で読む（要求のたびに読み直すので、入れ替えてもブリッジの再起動は要らない）
+- 以前の `data/claude_token` が残っている環境では、初回の問い合わせ時に自動で移し替える（移した後にファイルは消える）
 - トークンが期限切れ等で認証エラーになった場合は自動的に破棄され、次回の「Claude」ボタン押下時に再度入力ダイアログが表示される
 
 ## ファイル構成
@@ -113,7 +120,7 @@ pihole-monitor/
     config.rs         # 環境変数・定数
     db.rs             # SQLite（reviewed_domains）
     pihole.rs         # Pi-hole v6 API連携
-    claude.rs         # Claude CLI連携・トークン管理
+    claude.rs         # CLIブリッジへの問い合わせ・トークン管理
     api.rs            # /api/* のJSONエンドポイント
     pages.rs          # 画面の配信（HTML/CSS/JSを埋め込み）
   static/             # 画面（index.html / css / js）とアイコン・マニフェスト
@@ -123,9 +130,9 @@ pihole-monitor/
   docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
   docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
   .github/workflows/build-and-push-image.yml  # イメージをビルドしてGHCRへpush
-  data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成、gitignore対象）
+  data/               # SQLiteのDBとCLIブリッジ用の設定が入る（コンテナ外に永続化・起動時に自動生成、gitignore対象）
     monitor.db
-    claude_token
+    state/settings.db # Claudeのトークン（ブリッジが読み取り専用で読む）
 ```
 
 ## 既知の制約・注意点

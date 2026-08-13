@@ -10,8 +10,8 @@ use std::time::Duration;
 /// 「安全でないポート」として接続を拒否する(ERR_UNSAFE_PORT)ため使えない。
 pub const PORT: u16 = 6001;
 
-/// `claude` コマンドの出力がこれらを含んでいたら認証エラーとみなし、
-/// 保存済みトークンを破棄して再入力を促す。
+/// CLI ブリッジの応答がこれらを含んでいたら認証エラーとみなし、
+/// 保存済みトークンを破棄して再入力を促す(CLI 自身の認証エラーは 502 の本文に出る)。
 pub const AUTH_ERROR_KEYWORDS: &[&str] = &[
     "invalid api key",
     "invalid bearer token",
@@ -33,6 +33,11 @@ pub struct Config {
     pub pihole_query_limit: i64,
     pub claude_timeout: Duration,
     pub db_path: PathBuf,
+    /// CLI ブリッジ(chiezo-bridge)の URL。OpenAI 互換の口の根元まで。
+    pub claude_bridge_url: String,
+    /// ブリッジと共有するディレクトリ。ここに設定 DB を書き、ブリッジが読み取り専用で読む。
+    pub state_dir: PathBuf,
+    /// CLI を同梱していた頃のトークンの置き場(移行のためだけに残している)。
     pub claude_token_path: PathBuf,
 }
 
@@ -41,6 +46,12 @@ impl Config {
         // コンテナでは /data を永続化ボリュームにマウントする。
         // ホストで直接動かして開発するときは DATA_DIR=./data のように上書きする
         let data_dir = PathBuf::from(env_string("DATA_DIR", "/data"));
+        // ブリッジと共有する場所。既定はデータの置き場の下 ——
+        // バックアップ(data/ を丸ごとコピー)に一緒に乗るようにするため
+        let state_dir = match env_string("STATE_DIR", "") {
+            raw if !raw.trim().is_empty() => PathBuf::from(raw),
+            _ => data_dir.join("state"),
+        };
 
         Self {
             pihole_base_url: env_string("PIHOLE_BASE_URL", "http://pihole:80")
@@ -50,6 +61,10 @@ impl Config {
             pihole_query_limit: env_parse("PIHOLE_QUERY_LIMIT", -1),
             claude_timeout: Duration::from_secs(env_parse("CLAUDE_TIMEOUT", 60)),
             db_path: data_dir.join("monitor.db"),
+            claude_bridge_url: env_string("CLAUDE_BRIDGE_URL", "http://bridge:7013/v1")
+                .trim_end_matches('/')
+                .to_string(),
+            state_dir,
             claude_token_path: data_dir.join("claude_token"),
         }
     }

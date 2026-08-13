@@ -17,7 +17,7 @@ pihole-monitor/
     config.rs                    # 環境変数・定数の一元管理
     db.rs                        # SQLite操作（reviewed_domainsテーブル）
     pihole.rs                    # Pi-hole v6 API連携
-    claude.rs                    # Claude CLI連携・トークン管理
+    claude.rs                    # CLIブリッジへの問い合わせ・トークン管理
     api.rs                       # /api/* のJSONエンドポイント + AppState
     pages.rs                     # 画面・アイコンの配信（実行ファイルに埋め込み）
   static/                      # 画面とアイコン。ビルド時に実行ファイルへ埋め込まれる
@@ -36,9 +36,9 @@ pihole-monitor/
   .github/
     workflows/
       build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64のみ）
-  data/               # SQLiteのDBとClaudeトークンが保存される（コンテナ外に永続化・起動時に自動生成）
+  data/               # SQLiteのDBとCLIブリッジ用の設定が入る（コンテナ外に永続化・起動時に自動生成）
     monitor.db
-    claude_token
+    state/settings.db # Claudeのトークン（ブリッジが読み取り専用で読む）
 ```
 
 ### 変更したいことから読むべきファイルを引く表
@@ -52,7 +52,7 @@ pihole-monitor/
 | 画面のHTML構造・モーダルの追加を変える | `static/index.html` |
 | アイコン（ファビコン・ホーム画面）を変える | `static/icon.svg` + `scripts/gen_icons.py` |
 | Pi-hole APIとのやり取り（認証・クエリ取得）を変える | `src/pihole.rs` |
-| Claude CLI連携・トークン管理を変える | `src/claude.rs` |
+| CLIブリッジへの問い合わせ・トークン管理を変える | `src/claude.rs` |
 | 確認済みドメインのDB操作・スキーマを変える | `src/db.rs` |
 | 既存/新規APIエンドポイントを変える | `src/api.rs` |
 | 画面の配信ルート（`/`・静的ファイル）を変える | `src/pages.rs` |
@@ -69,7 +69,9 @@ pihole-monitor/
 | `PIHOLE_BASE_URL` | Pi-holeのURL（末尾の`/`は落とす） | `http://pihole:80` |
 | `PIHOLE_PASSWORD` | Pi-holeの管理パスワード | 空文字 |
 | `PIHOLE_QUERY_LIMIT` | 取得するブロッククエリの件数（`-1`で全件） | `-1` |
-| `CLAUDE_TIMEOUT` | Claude CLI呼び出しのタイムアウト秒数 | `60` |
+| `CLAUDE_TIMEOUT` | Claudeへの問い合わせのタイムアウト秒数 | `60` |
+| `CLAUDE_BRIDGE_URL` | CLIブリッジ（別コンテナ）のURL | `http://bridge:7013/v1` |
+| `STATE_DIR` | ブリッジと共有する設定の置き場 | `<DATA_DIR>/state` |
 | `DATA_DIR` | DBとトークンの置き場 | `/data` |
 | `RUST_LOG` | ログレベル（`tracing_subscriber`のEnvFilter） | `info` |
 
@@ -114,21 +116,23 @@ reviewed_domains (
 | GET | `/static/manifest.webmanifest` | Webアプリマニフェスト |
 | GET | `/api/domains` | ブロック済みドメイン一覧（reviewed・noteフラグ付き）。Pi-hole取得失敗時は502 + `{"error": "pihole_unavailable"}` |
 | POST/DELETE | `/api/review` | ドメインを確認済みにする（メモも保存）／未確認に戻す |
-| POST | `/api/ask-claude` | 指定ドメインについてClaude CLIに問い合わせ、ブロック理由の説明を取得 |
+| POST | `/api/ask-claude` | 指定ドメインについてCLIブリッジ経由でClaudeに問い合わせ、ブロック理由の説明を取得 |
 | POST | `/api/claude-token` | `claude setup-token` で発行したトークンを保存 |
 
 `/api/domains`の並び順は「未確認が先 → 件数の多い順 → ドメイン名の昇順」。3番目のキーは`HashMap`の列挙順が毎回変わるため、表示順を固定する目的で入れている。
 
 #### Claude連携（`src/claude.rs`）
 
-サーバー側で `claude -p "<プロンプト>" --output-format text` を`tokio::process`でヘッドレス実行し、標準出力を回答として返す。
+**CLIは同梱しない。** 別コンテナのCLIブリッジ（chiezoリポジトリの`chiezo-bridge`。Claude CodeをOpenAI互換の`/chat/completions`に見せるサイドカー）へHTTPで頼み、応答の本文をそのまま回答として返す。以前はnpmで`@anthropic-ai/claude-code`を同梱しており、**CLIで97MB・Nodeで52MB**積んでいた（アプリ本体は3MB）。CLIの更新はブリッジのコンテナを入れ替えるだけで済む。
 
 - 認証は`claude setup-token`で発行した長期OAuthトークンを使う方式。ホストの`~/.claude`はマウントしない
-- トークンは`$DATA_DIR/claude_token`にプレーンテキストで保存し（保存のたびにパーミッションを600に設定し直す）、subprocess実行時に`CLAUDE_CODE_OAUTH_TOKEN`環境変数として渡す
-- トークンが未保存、または`claude`コマンドの出力が認証エラーらしき内容（`AUTH_ERROR_KEYWORDS`でキーワード判定）の場合、`/api/ask-claude`は`{"success": false, "error": "token_required"}`（HTTP 401）を返す。判定に該当した場合は保存済みトークンも削除する。**標準出力・標準エラーの両方を見る**（実際の401は標準出力側に出る）
+- **トークンは共有ディレクトリの設定DB（`$STATE_DIR/settings.db`の`provider_settings`表）に書く**。CLIは別コンテナで動くので環境変数では渡せない。ブリッジはこれを**読み取り専用でマウントして、要求のたびに読み直す**（入れ替えても再起動が要らない）。**WALにしない** —— 読み取り専用マウントでは`-shm`を作れず開けなくなる。**パーミッションは絞らない**（ブリッジはuid 1000固定で、本体の実行ユーザーはホストに合わせて変えられるため）
+- **旧`$DATA_DIR/claude_token`は初回に設定DBへ移して消す**。更新した環境でトークンの入れ直しを求めないため
+- トークンが未保存、またはブリッジが401（認証情報を読めていない）／応答が認証エラーらしき内容（`AUTH_ERROR_KEYWORDS`でキーワード判定。CLI自身の認証エラーは502の本文に出る）の場合、`/api/ask-claude`は`{"success": false, "error": "token_required"}`（HTTP 401）を返す。判定に該当した場合は保存済みトークンも無効化する
+- **待ちはブリッジより30秒長くする**。先に切れると「ブリッジが何秒で諦めたか」（504と経過秒数）が分からなくなる
+- ブリッジは**ホストへポートを公開しない**。認証が無いうえにトークンを読めるので、外から触れるとそのままAIを使われる
 - フロントエンドは`error === "token_required"`を受け取ると、Claudeモーダルの代わりにトークン入力モーダル（`token-modal`）を開く。ユーザーが手元の端末で`claude setup-token`を実行して得たトークンを貼り付けると`POST /api/claude-token`で保存し、保存成功後に同じドメインで`askClaude()`を自動的に再実行する
 - タイムアウトは`CLAUDE_TIMEOUT`環境変数で制御（デフォルト60秒）。`kill_on_drop(true)`を付けているので、タイムアウトでフューチャーを捨てると子プロセスも落ちる
-- コンテナには`Dockerfile`の実行ステージでNode.js + `@anthropic-ai/claude-code`をインストールしている
 
 #### フロントエンド（`static/`）
 
@@ -187,9 +191,9 @@ bindマウント先がホストに無くてDockerがroot所有で作った場合
 （standaloneは冒頭の `x-run-as`）で合わせる。**chown先と `user:` は同じ値を参照させること**
 （片方だけ直すと起動しなくなる）。
 
-uidを1000以外にすると`/etc/passwd`に無いユーザーになり`HOME`が`/`に落ちるため、
-Dockerfileで`HOME=/home/app`（`chmod 1777`）を用意している。
-これが無いと`claude`コマンドが設定を書けず「Claudeに聞く」だけが失敗する。
+uidを1000以外にできる設計なので、**`/etc/passwd`に載っていないuidでも動く必要がある**。
+`HOME`を使うものはもう無い（CLIを外したため）が、共有設定のパーミッションを
+所有者だけに絞れないのはこれが理由（ブリッジはuid 1000固定で読みに来る）。
 
 ## イメージの配布（GHCR / GitHub Actions）
 
@@ -201,18 +205,17 @@ Dockerfileで`HOME=/home/app`（`chmod 1777`）を用意している。
 - **公開先**: `ghcr.io/rtcode337/pihole-monitor`
   - タグ: `latest`（mainへのpush時）/ `sha-<短縮SHA>`（毎回）/ `v*` gitタグ名
   - **GHCRに残るのは最新の1版だけ**。push後に古い版を削除している（GHCRのストレージ枠はアカウント全体で共有で、超えると課金ではなくpushがブロックされる）。そのぶん過去のイメージには戻せない。世代を残すならworkflowの`min-versions-to-keep`を上げる
-  - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`cargo build`・`npm install -g @anthropic-ai/claude-code`が極端に遅くなるため作らない。**arm64が必要になったらQEMUではなくRustのクロスコンパイル**（`--target aarch64-unknown-linux-gnu`）でamd64ランナーからバイナリを作るほうが速い
+  - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`cargo build`が極端に遅くなるため作らない。**arm64が必要になったらQEMUではなくRustのクロスコンパイル**（`--target aarch64-unknown-linux-gnu`）でamd64ランナーからバイナリを作るほうが速い
   - リポジトリが非公開＝パッケージも非公開。デプロイ先では`read:packages`スコープのPATで`docker login ghcr.io`が必要
-- **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは2つで、`pihole-monitor-init`（所有者合わせ）と本体。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
+- **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは3つで、`pihole-monitor-init`（所有者合わせ）・本体・`bridge`（Claude CodeのCLIを動かすサイドカー。**公開パッケージ**なのでdocker login不要）。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
 - **`docker-compose.standalone.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」（データの置き場・Pi-holeの接続設定・実行ユーザー）にまとめてある。`chown`先と`user:`はどちらも`x-run-as`アンカーを参照させて、片方だけ直す事故を防いでいる。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
 
 ### Dockerfileで気をつける点
 
 - **ビルド側と実行側のDebianコードネームを揃える**（現在は`trixie`）。ずれるとglibcのバージョン差で実行ファイルが動かない
-- **実行イメージに`ca-certificates`を入れている**。`node:*-slim`には入っておらず、無いと`PIHOLE_BASE_URL`を`https://`にしたときにrustlsの初期化で落ちる（HTTPクライアント生成時にエラー）
+- **実行イメージに`ca-certificates`を入れている**。`debian:*-slim`には入っておらず、無いと`PIHOLE_BASE_URL`を`https://`にしたときにrustlsの初期化で落ちる（HTTPクライアント生成時にエラー）
 - **依存クレートは空の`main.rs`で一度ビルドして別レイヤーに固める**。`Cargo.toml`/`Cargo.lock`を変えなければ、以降のビルドは自前のクレートだけになる（CIの実行時間を抑えるため）
-- **`HOME=/home/app`（`chmod 1777`）を用意している**。composeの`user:`で任意のuidを指定されても`claude`コマンドが設定を書けるようにするため（詳細は「実行ユーザーとデータディレクトリ」）
-- イメージの大半（283MB）は`@anthropic-ai/claude-code`とNode.js。Rustの実行ファイル自体は約6.5MB
+- **実行ステージはNodeではなく`debian:trixie-slim`**。CLIを外したので、載せるのはRustの実行ファイル（約6.5MB）と`ca-certificates`だけになった（圧縮後で約182MB → 約34MB）
 
 ## 既知の制約・注意点
 
@@ -221,5 +224,5 @@ Dockerfileで`HOME=/home/app`（`chmod 1777`）を用意している。
 - ブロック済みクエリの取得件数は`PIHOLE_QUERY_LIMIT`環境変数で制御（デフォルト`-1`で全件）。Pi-hole v6 APIのパラメータ名は`length`でデフォルト100件
 - 確認済み状態はローカルDBのみで管理。Pi-holeを再インストールしても確認済み情報は維持される
 - `claude setup-token`で発行されるトークンは長期間有効（発行時点の仕様では約1年）。期限切れ時は認証エラーを検知してトークンを破棄し、次回のClaudeボタン押下時に再入力を促す
-- `data/.gitkeep`は空ディレクトリをgit管理下に置くためのプレースホルダー。古いDocker Engine（Raspberry Pi等）は`volumes: - ./data:/data`のホスト側パスが存在しないとbind mountに失敗して起動できないことがあるため、`git clone`した時点で`data/`が必ず存在するようにしている。`data/`配下の実ファイル（`monitor.db`・`claude_token`）は`.gitignore`で引き続き除外
+- `data/.gitkeep`は空ディレクトリをgit管理下に置くためのプレースホルダー。古いDocker Engine（Raspberry Pi等）は`volumes: - ./data:/data`のホスト側パスが存在しないとbind mountに失敗して起動できないことがあるため、`git clone`した時点で`data/`が必ず存在するようにしている。`data/`配下の実ファイル（`monitor.db`・`state/settings.db`）は`.gitignore`で引き続き除外
 - テストコードは無い。動作確認はイメージをビルドして起動し、`/api/*`をcurlで叩いて行っている

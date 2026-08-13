@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: Db::open(&config.db_path)?,
         pihole: PiholeClient::new(&config)?,
-        claude: ClaudeClient::new(&config),
+        claude: ClaudeClient::new(&config)?,
     };
 
     let app = Router::new()

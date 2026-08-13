@@ -30,7 +30,9 @@ services:
     user: root
     volumes:
       - ./data:/data
-    entrypoint: ["sh", "-c", "chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
+    # state/ はCLIブリッジと共有する(bridgeが読み取り専用でマウントする)。
+    # ここで先に作っておかないと、bridgeのマウントでDockerがroot所有で作ってしまう
+    entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
     restart: "no"
 
   pihole-monitor:
@@ -54,3 +56,31 @@ services:
     # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
     user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
     restart: unless-stopped
+
+  # 「Claudeに聞く」で使うCLIを動かすサイドカー(chiezoリポジトリのイメージ)。
+  # **本体はCLIを持たない** —— イメージから150MB近くを外せる。
+  #
+  # **ホストへポートを公開しない。** 認証が無いうえにトークンを読めるので、
+  # 外から触れるとそのままAIを使われる。呼ぶのは同じcomposeネットワークの本体だけ。
+  #
+  # 認証情報は data/state/settings.db 経由で渡す(画面から入れたトークンを本体が書く)。
+  # MCPは繋がない —— 渡すのは自前のプロンプトで、知識ベースを引かせる用途ではない
+  bridge:
+    # **公開パッケージ**なので docker login は要らない(本体のイメージだけが非公開)
+    image: ${BRIDGE_IMAGE:-ghcr.io/rtcode337/chiezo-bridge:latest}
+    container_name: pihole-monitor-bridge
+    depends_on:
+      pihole-monitor-init:
+        condition: service_completed_successfully
+    volumes:
+      # **読み取り専用**。ブリッジは書かない
+      - ./data/state:/state:ro
+    environment:
+      - CHIEZO_BRIDGE_CLI=claude
+      - CHIEZO_BRIDGE_MCP_URL=
+      # 1回の上限は要求ごとに送るので、ここは保険の既定値(CLAUDE_TIMEOUT と同じ値にする)
+      - CHIEZO_BRIDGE_TIMEOUT=${CLAUDE_TIMEOUT:-60}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:7013/health"]
+      interval: 60s

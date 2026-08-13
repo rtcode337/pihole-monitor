@@ -23,11 +23,17 @@
 # ——こちらは値の直書きぶん古くなりやすい。
 
 # ---- ここだけ編集: データの置き場(ホストの絶対パス) ----
-# SQLite(monitor.db)とClaudeの認証トークン(claude_token)が入る。
+# SQLite(monitor.db)と、CLIブリッジと共有する設定(state/settings.db)が入る。
 # 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
 # 先に作っておくのが確実。所有者合わせは起動時に pihole-monitor-init がやるので、
 # `chown` を手で打つ必要はない。
 x-data-dir: &data-dir "/path/to/pihole-monitor/data"
+
+# ---- ここだけ編集: 上の置き場の下の state ディレクトリ ----
+# CLIブリッジと共有する設定(settings.db)の置き場。**上の値 + /state** を書く
+# (YAMLのアンカーは文字列の一部に差し込めないため2行に分けてある)。
+# 中身は本体が書き、ブリッジは読み取り専用で読む
+x-state-dir: &state-dir "/path/to/pihole-monitor/data/state"
 
 # ---- ここだけ編集: 実行ユーザー ----
 # ホスト側でこのディレクトリを読み書きするユーザーの `id -u`:`id -g`。
@@ -45,6 +51,8 @@ x-app-env: &app-env
   PIHOLE_QUERY_LIMIT: "-1"
   # 「Claudeに聞く」1回あたりのタイムアウト秒数
   CLAUDE_TIMEOUT: "60"
+  # CLIを動かすサイドカー。ホストへは公開していないのでサービス名で呼ぶ
+  CLAUDE_BRIDGE_URL: "http://bridge:7013/v1"
 
 services:
   # 本体を起動する前にデータディレクトリの所有者を実行ユーザーに合わせる。
@@ -59,7 +67,7 @@ services:
       - type: bind
         source: *data-dir
         target: /data
-    entrypoint: ["sh", "-c", 'chown -R "$$0" /data', *run-as]
+    entrypoint: ["sh", "-c", 'mkdir -p /data/state && chown -R "$$0" /data', *run-as]
     restart: "no"
 
   pihole-monitor:
@@ -80,3 +88,29 @@ services:
         target: /data
     user: *run-as
     restart: unless-stopped
+
+  # 「Claudeに聞く」で使うCLIを動かすサイドカー(chiezoリポジトリの**公開**イメージ。
+  # これだけは docker login 無しでpullできる)。**本体はCLIを持たない**。
+  # **ホストへポートを公開しない** —— 認証が無いうえにトークンを読めるため。
+  # 認証情報は state/settings.db 経由で渡す(画面から入れたトークンを本体が書く)
+  bridge:
+    image: ghcr.io/rtcode337/chiezo-bridge:latest
+    container_name: pihole-monitor-bridge
+    depends_on:
+      pihole-monitor-init:
+        condition: service_completed_successfully
+    volumes:
+      # **読み取り専用**。ブリッジは書かない
+      - type: bind
+        source: *state-dir
+        target: /state
+        read_only: true
+    environment:
+      CHIEZO_BRIDGE_CLI: "claude"
+      # MCPは繋がない(渡すのは自前のプロンプトのため)
+      CHIEZO_BRIDGE_MCP_URL: ""
+      CHIEZO_BRIDGE_TIMEOUT: "60"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:7013/health"]
+      interval: 60s
