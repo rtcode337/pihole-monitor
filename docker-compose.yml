@@ -16,7 +16,8 @@
 # `build: .` は手元のソースから作り直したいとき用に残してある(`docker compose build`)。
 #
 # `.env` もリポジトリも置けない環境(NASのコンテナマネージャー等)向けには
-# docker-compose.standalone.yml を用意している。
+# docker-compose.standalone.example.yml を用意している(雛形。実値を入れたものは
+# .gitignore してあるので、コピーして作る)。
 services:
   # 本体を起動する前に data/ の所有者を実行ユーザーに合わせる。
   # bindマウント先がホストに無いとDockerがroot所有で作ってしまい、非rootの本体が
@@ -35,20 +36,13 @@ services:
     entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
     restart: "no"
 
-  # 「AIに聞く」でChiezo(LAN内の知識サーバー)を使うときの経路については
-  # .env の CHIEZO_BASE_URL を参照。**同じホストでChiezoが動いているのに届かないとき**は、
-  # コンテナからホストの公開ポートへ戻る経路が塞がれている可能性がある(NASのファイアウォール等)。
-  # その場合はChiezoのネットワークに相乗りしてサービス名で呼ぶ:
-  #
-  #   services:
-  #     pihole-monitor:
-  #       networks: [default, chiezo]   # ← **default も必ず並べる**
-  #   networks:
-  #     chiezo:
-  #       external: true
-  #       name: chiezo_default          # ← chiezo 側の実際のネットワーク名(docker network ls で確認)
-  #
-  # そのうえで CHIEZO_BASE_URL を http://chiezo-api:7010 にする。
+  # 「AIに聞く」でChiezo(LAN内の知識サーバー)を使うときの接続先は .env の CHIEZO_BASE_URL。
+  # **同じホストでChiezoが動いているのに届かないとき**は、コンテナからホストの公開ポートへ
+  # 戻る経路が塞がれている可能性がある(NASのファイアウォール等)。その場合はChiezoの
+  # ネットワークに相乗りしてサービス名で呼ぶ —— **やることは下の networks: と
+  # ファイル末尾の networks: のコメントを外し、CHIEZO_BASE_URL を
+  # http://chiezo-api:7010 にするだけ**(chiezo-api はコンテナ名なので、相手の
+  # プロジェクト名が何でもこの名前で引ける)。
   # **`networks:` を書くと既定のネットワークに自動で入らなくなる** —— `default` を並べ忘れると
   # bridge にも繋がらなくなる(「AIに聞く」がどちらの経路でも動かなくなる)
 
@@ -73,6 +67,9 @@ services:
     # uid/gid 1000(nodeユーザー)。`id -u` が1000以外のホストでは
     # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
     user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
+    # Chiezoがホストの公開ポート経由で届かないときだけ、次の1行と
+    # ファイル末尾の networks: を有効にする(**default も必ず並べる**)
+    #networks: [default, chiezo]
     restart: unless-stopped
 
   # 「AIに聞く」でCLIブリッジを使うときのサイドカー(chiezoリポジトリのイメージ)。
@@ -102,3 +99,12 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:7013/health"]
       interval: 60s
+
+# Chiezoのネットワークに相乗りするときだけ有効にする(上の pihole-monitor の
+# networks: と対で使う)。`external: true` は**そのネットワークが既に在ること**が前提なので、
+# Chiezoを同じホストで動かしていない環境で有効にすると本体が起動できなくなる。
+# **name は環境で変わる**(`<プロジェクト名>_default`)ので docker network ls で確かめること
+#networks:
+#  chiezo:
+#    external: true
+#    name: chiezo_default

@@ -35,7 +35,7 @@ pihole-monitor/
   Dockerfile                   # マルチステージ（rust:slim でビルド → debian:slim で実行）
   .dockerignore                # .env・data・target・.git等をビルドコンテキストから除外
   docker-compose.yml           # 通常用（GHCRのイメージをpull。手元ビルドも可）
-  docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
+  docker-compose.standalone.example.yml # .env・クローンを置けない環境向けの雛形（値の直書き）
   .github/
     workflows/
       build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64のみ）
@@ -262,7 +262,7 @@ pihole-monitor 枠で、**ホスト側とコンテナ内で同じ番号**にし�
 **6000番台は使わない** —— 6000はX11用に予約されており、主要ブラウザが「安全でないポート」として
 接続を拒否する（`ERR_UNSAFE_PORT`）。かつて6001を使っていたのはこれを避けるためだった。
 ポートを変えるときは`src/config.rs`の`PORT`と`Dockerfile`の`EXPOSE`、
-`docker-compose.yml`・`docker-compose.standalone.yml`の`ports`、README・本ファイルの
+`docker-compose.yml`・`docker-compose.standalone.example.yml`の`ports`、README・本ファイルの
 アクセスURLを揃えること。
 
 **注意**: `src/`と`static/`はビルド時にイメージへ焼き込まれる（ボリュームマウントではない）ため、コード変更後は`docker compose restart`ではなく`docker compose up -d --build`で再ビルドしないと反映されない。
@@ -300,7 +300,9 @@ uidを1000以外にできる設計なので、**`/etc/passwd`に載っていな�
   - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`cargo build`が極端に遅くなるため作らない。**arm64が必要になったらQEMUではなくRustのクロスコンパイル**（`--target aarch64-unknown-linux-gnu`）でamd64ランナーからバイナリを作るほうが速い
   - リポジトリが非公開＝パッケージも非公開。デプロイ先では`read:packages`スコープのPATで`docker login ghcr.io`が必要
 - **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは3つで、`pihole-monitor-init`（所有者合わせ）・本体・`bridge`（Claude CodeのCLIを動かすサイドカー。**公開パッケージ**なのでdocker login不要）。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
-- **`docker-compose.standalone.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」（データの置き場・Pi-holeの接続設定・実行ユーザー）にまとめてある。`chown`先と`user:`はどちらも`x-run-as`アンカーを参照させて、片方だけ直す事故を防いでいる。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
+- **`docker-compose.standalone.example.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」（データの置き場・Pi-holeの接続設定・実行ユーザー）にまとめてある。`chown`先と`user:`はどちらも`x-run-as`アンカーを参照させて、片方だけ直す事故を防いでいる。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
+  - **リポジトリに置くのは`.example`の付いた雛形だけ。** 実値を入れてコピーした`docker-compose.standalone.yml`は`.gitignore`してある（`.env.example`と`.env`の関係と同じ。**この形式は値を直書きするので、追記した瞬間にPi-holeのパスワードがコミット対象に入る**）
+  - **Chiezoのネットワークに相乗りする設定は、現物の位置にコメントアウトで置いてある**（サービスの`#networks: [default, chiezo]`とファイル末尾の`#networks:`）。**使うときはコメントを外すだけ** —— 手順を散文で書くと、貼り付ける側がインデントを組み直すことになる。既定で外してあるのは、`external: true`が「そのネットワークが既に在ること」を前提にするため（Chiezoを同じホストで動かしていない環境で有効にすると起動できない）
 
 ### Dockerfileで気をつける点
 

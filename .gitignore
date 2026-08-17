@@ -1,4 +1,7 @@
 data/*
 !data/.gitkeep
 .env
+# 単体定義は値を直書きする(Pi-holeのパスワードがそのまま入る)ため、
+# リポジトリに置くのは docker-compose.standalone.example.yml の方だけにする
+docker-compose.standalone.yml
 /target

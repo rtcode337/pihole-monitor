@@ -92,9 +92,16 @@ DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo 
 ### リポジトリを置けない環境（NASのコンテナマネージャー等）
 
 `.env` もクローンも置けず、管理画面にYAMLを貼り付けて起動するタイプの環境向けに
-[docker-compose.standalone.yml](docker-compose.standalone.yml) を用意している。
+[docker-compose.standalone.example.yml](docker-compose.standalone.example.yml) を用意している。
 `${...}`・`env_file` を使わず値を直書きし、`build:` を持たず、データの置き場を絶対パスで
-書いたもの。冒頭の「ここだけ編集」——データディレクトリの絶対パスとPi-holeの接続先——を
+書いたもの。**これは雛形**なので、コピーしてから編集する（この形式は値を直書きするので、
+実値を入れたファイルはコミット対象から外してある）。
+
+```bash
+cp docker-compose.standalone.example.yml docker-compose.standalone.yml
+```
+
+コピーした側の冒頭の「ここだけ編集」——データディレクトリの絶対パスとPi-holeの接続先——を
 書き換えて貼り付ければ起動する。
 
 ## AIに聞く機能について
@@ -161,7 +168,7 @@ pihole-monitor/
     gen_icons.py      # アイコンのPNGを static/icon.svg から生成（Python標準ライブラリのみ）
   Dockerfile
   docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
-  docker-compose.standalone.yml # .env・クローンを置けない環境向け（値の直書き）
+  docker-compose.standalone.example.yml # .env・クローンを置けない環境向けの雛形（値の直書き）
   .github/workflows/build-and-push-image.yml  # イメージをビルドしてGHCRへpush
   data/               # SQLiteのDBとCLIブリッジ用の設定が入る（コンテナ外に永続化・起動時に自動生成、gitignore対象）
     monitor.db        # 確認済みドメインと、聞く相手の選択
