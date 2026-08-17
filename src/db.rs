@@ -1,4 +1,4 @@
-//! SQLite操作(reviewed_domainsテーブル)。Pi-holeには一切書き込まない。
+//! SQLite操作(reviewed_domains・settings テーブル)。Pi-holeには一切書き込まない。
 //!
 //! rusqliteは同期APIなので、実際のクエリは [`tokio::task::spawn_blocking`] に逃がして
 //! 非同期ランタイムのワーカースレッドを塞がないようにしている。接続は1本を
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 #[derive(Clone)]
 pub struct Db {
@@ -36,6 +36,17 @@ impl Db {
              )",
         )
         .context("reviewed_domainsテーブルを作成できない")?;
+
+        // 画面から決める設定(いまは「どの AI に聞くか」だけ)。**環境変数ではなく DB に持つ**
+        // —— 実行のたびに読むので、コンテナを作り直さなくても切り替えが効く
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                 key        TEXT PRIMARY KEY,
+                 value      TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             )",
+        )
+        .context("settingsテーブルを作成できない")?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -74,6 +85,39 @@ impl Db {
     pub async fn delete_reviewed(&self, domain: String) -> Result<()> {
         self.with_conn(move |conn| {
             conn.execute("DELETE FROM reviewed_domains WHERE domain = ?1", (&domain,))?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 設定を1件読む。未設定なら `None`。
+    pub async fn setting(&self, key: &'static str) -> Result<Option<String>> {
+        self.with_conn(move |conn| {
+            let value = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = ?1",
+                    [key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            Ok(value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+        })
+        .await
+    }
+
+    /// 設定を1件書く。`None` なら行を消す(= 未設定に戻す)。
+    pub async fn set_setting(&self, key: &'static str, value: Option<String>) -> Result<()> {
+        let updated_at = chrono::Local::now().to_rfc3339();
+        self.with_conn(move |conn| {
+            match value {
+                Some(value) => conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO UPDATE SET
+                         value=excluded.value, updated_at=excluded.updated_at",
+                    (key, &value, &updated_at),
+                )?,
+                None => conn.execute("DELETE FROM settings WHERE key = ?1", (key,))?,
+            };
             Ok(())
         })
         .await

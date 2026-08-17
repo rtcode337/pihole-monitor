@@ -1,4 +1,7 @@
-//! 「Claudeに聞く」の問い合わせとトークン管理。
+//! Claude Code(CLI ブリッジ経由)への問い合わせとトークン管理。
+//!
+//! **Chiezo を使わないときの経路。** どの AI に聞くかを選べるのは Chiezo 越しのときだけで
+//! (`chiezo.rs`)、Chiezo の URL が未設定か、相手を選んでいない場合はここが受け持つ。
 //!
 //! **CLI はこのイメージに入っていない。** 別コンテナの CLI ブリッジ(chiezo-bridge。
 //! Claude Code を OpenAI 互換の `/chat/completions` に見せるサイドカー)へ HTTP で頼む ——
@@ -18,15 +21,8 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::json;
 
+use crate::ai::AskError;
 use crate::config::{AUTH_ERROR_KEYWORDS, Config};
-
-/// 「Claudeに聞く」の失敗理由。
-pub enum AskError {
-    /// トークンが未保存、または認証エラーだった。フロントにトークン入力を促させる
-    TokenRequired,
-    /// それ以外の失敗。文字列はそのまま画面に出す
-    Failed(String),
-}
 
 /// ブリッジ側で Claude Code を指す名前(`CHIEZO_BRIDGE_CLI` と同じ値)。
 const PROVIDER: &str = "claude";
@@ -92,24 +88,22 @@ impl ClaudeClient {
         }
     }
 
-    /// 指定ドメインについてブリッジ経由で Claude に説明を求める。
-    pub async fn ask_about_domain(&self, domain: &str) -> Result<String, AskError> {
+    /// ブリッジ経由で Claude に聞く。**プロンプトは受け取る** —— 相手が Chiezo 越しでも
+    /// 同じ文言になるよう、指示文は `ai.rs` の1か所に置いてある。
+    pub async fn ask(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AskError> {
         if self.load_token().is_none() {
             return Err(AskError::TokenRequired);
         }
-
-        let prompt = format!(
-            "Pi-holeの広告/トラッキングブロックリストによってブロックされたドメイン「{domain}」について、\
-             これがどのようなサービス・通信に関連するドメインで、なぜブロックリストに含まれている可能性が高いかを\
-             日本語で3〜5行程度で簡潔に説明してください。"
-        );
 
         let url = format!("{}/chat/completions", self.bridge_url.trim_end_matches('/'));
         let response = self
             .http
             .post(&url)
             .json(&json!({
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 "chiezo_max_turns": MAX_TURNS,
                 "chiezo_timeout": self.timeout.as_secs_f64(),
             }))

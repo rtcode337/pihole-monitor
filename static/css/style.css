@@ -209,7 +209,7 @@ header h1 span { color: #c9d1d9; }
 
 .unreview-btn:hover { color: #c9d1d9; border-color: #8b949e; }
 
-.ask-claude-btn {
+.ask-ai-btn {
   border: 1px solid #6e4a2e;
   background: transparent;
   color: #d9a066;
@@ -218,9 +218,33 @@ header h1 span { color: #c9d1d9; }
   gap: 4px;
 }
 
-.ask-claude-btn:hover { background: #3a2a1a; }
+.ask-ai-btn:hover { background: #3a2a1a; }
 
-.claude-modal-body {
+/* いま聞く相手を名前ごと出すボタン（押すと選択のモーダルが開く）。
+   更新ボタンと並べて右端に寄せる */
+.ai-btn {
+  margin-left: auto;
+  padding: 6px 14px;
+  border: 1px solid #6e4a2e;
+  border-radius: 4px;
+  background: transparent;
+  color: #d9a066;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-btn:hover { background: #3a2a1a; }
+
+/* 更新ボタンは .ai-btn が右端を取ったあとに続く */
+.ai-btn + .refresh-btn { margin-left: 0; }
+
+.answer-body {
   font-size: 12px;
   line-height: 1.7;
   color: #c9d1d9;
@@ -231,19 +255,106 @@ header h1 span { color: #c9d1d9; }
   margin-bottom: 16px;
 }
 
-.claude-modal-body.loading-text {
+.answer-body.loading-text {
   color: #8b949e;
 }
 
-.claude-modal-body.error-text {
+.answer-body.error-text {
   color: #f85149;
 }
 
-.claude-modal-body code {
+.answer-body code {
   background: #21262d;
   padding: 2px 6px;
   border-radius: 4px;
 }
+
+/* 誰が書いたか。回答の下に小さく出す（本文と混ぜない） */
+.answer-author {
+  font-size: 11px;
+  color: #484f58;
+  margin: -8px 0 16px;
+  word-break: break-word;
+}
+
+/* ---- 聞く相手の選択 ---- */
+
+.ai-note {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #8b949e;
+  margin-bottom: 12px;
+}
+
+.ai-note.error-text { color: #f85149; }
+
+.ai-note code {
+  background: #21262d;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.ai-list {
+  /* 相手が増えても モーダルが画面から溢れないようにする */
+  max-height: 45vh;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.ai-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.ai-row:hover { border-color: #30363d; }
+
+/* ラジオと名前だけを label に入れる。select を label の中に置くと、
+   ドロップダウンを触るだけでラジオが動いてしまう */
+.ai-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-row-name {
+  font-size: 13px;
+  color: #c9d1d9;
+  word-break: break-word;
+}
+
+.ai-row-opts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-row-hint {
+  font-size: 10px;
+  color: #484f58;
+}
+
+.ai-select {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #c9d1d9;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  max-width: 100%;
+}
+
+.ai-select:focus { outline: none; border-color: #58a6ff; }
 
 .edit-note-btn {
   border: 1px solid #30363d;

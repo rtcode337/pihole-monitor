@@ -35,6 +35,23 @@ services:
     entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
     restart: "no"
 
+  # 「AIに聞く」でChiezo(LAN内の知識サーバー)を使うときの経路については
+  # .env の CHIEZO_BASE_URL を参照。**同じホストでChiezoが動いているのに届かないとき**は、
+  # コンテナからホストの公開ポートへ戻る経路が塞がれている可能性がある(NASのファイアウォール等)。
+  # その場合はChiezoのネットワークに相乗りしてサービス名で呼ぶ:
+  #
+  #   services:
+  #     pihole-monitor:
+  #       networks: [default, chiezo]   # ← **default も必ず並べる**
+  #   networks:
+  #     chiezo:
+  #       external: true
+  #       name: chiezo_default          # ← chiezo 側の実際のネットワーク名(docker network ls で確認)
+  #
+  # そのうえで CHIEZO_BASE_URL を http://chiezo-api:7010 にする。
+  # **`networks:` を書くと既定のネットワークに自動で入らなくなる** —— `default` を並べ忘れると
+  # bridge にも繋がらなくなる(「AIに聞く」がどちらの経路でも動かなくなる)
+
   pihole-monitor:
     depends_on:
       pihole-monitor-init:
@@ -43,9 +60,10 @@ services:
     build: .
     container_name: pihole-monitor
     ports:
-      # host:container。6000はブラウザが「安全でないポート」として拒否する
-      # (X11用の予約。ERR_UNSAFE_PORT)ため使えないので6001にしている
-      - "6001:6001"
+      # host:container。**7000番台に10刻みで割り当てる運用**の pihole-monitor 枠。
+      # 6000番台は使わない —— 6000はX11用の予約で、ブラウザが「安全でないポート」として
+      # 拒否する(ERR_UNSAFE_PORT)
+      - "7060:7060"
     env_file:
       - .env
     volumes:
@@ -57,7 +75,7 @@ services:
     user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
     restart: unless-stopped
 
-  # 「Claudeに聞く」で使うCLIを動かすサイドカー(chiezoリポジトリのイメージ)。
+  # 「AIに聞く」でCLIブリッジを使うときのサイドカー(chiezoリポジトリのイメージ)。
   # **本体はCLIを持たない** —— イメージから150MB近くを外せる。
   #
   # **ホストへポートを公開しない。** 認証が無いうえにトークンを読めるので、

@@ -46,6 +46,6 @@ RUN mkdir -p /data/state && chown -R 1000:1000 /data
 # /etc/passwd に載っていないuidでも動く必要がある(HOMEを使うものはもう無い)
 USER 1000:1000
 
-EXPOSE 6001
+EXPOSE 7060
 
 CMD ["pihole-monitor"]

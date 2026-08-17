@@ -40,6 +40,9 @@
   <button class="filter-btn active" onclick="setFilter('new', event)">未確認のみ</button>
   <button class="filter-btn" onclick="setFilter('reviewed', event)">確認済みのみ</button>
   <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
+  <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
+       押す前に知りたいので、名前を隠して歯車だけにはしない -->
+  <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
 
@@ -61,15 +64,30 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="claude-modal" style="display:none" onclick="onClaudeOverlayClick(event)">
+<div class="modal-overlay" id="answer-modal" style="display:none" onclick="onAnswerOverlayClick(event)">
   <div class="modal">
-    <div class="modal-title">Claudeに聞く</div>
-    <div class="modal-domain" id="claude-modal-domain"></div>
-    <div class="claude-modal-body" id="claude-modal-body"></div>
-    <textarea id="claude-modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
+    <div class="modal-title">AIに聞く</div>
+    <div class="modal-domain" id="answer-modal-domain"></div>
+    <div class="answer-body" id="answer-modal-body"></div>
+    <!-- 誰が書いたか。相手を切り替えられるので、これが無いと読み比べにならない -->
+    <div class="answer-author" id="answer-modal-author"></div>
+    <textarea id="answer-modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
     <div class="modal-actions">
-      <button class="action-btn cancel-btn" onclick="closeClaudeModal()">閉じる</button>
-      <button class="action-btn confirm-btn" onclick="submitReviewFromClaudeModal()">確認済みにする</button>
+      <button class="action-btn cancel-btn" onclick="closeAnswerModal()">閉じる</button>
+      <button class="action-btn confirm-btn" onclick="submitReviewFromAnswerModal()">確認済みにする</button>
+    </div>
+  </div>
+</div>
+
+<!-- 聞く相手を選ぶ。中身（相手・モデル・考える量）はChiezoに問い合わせてJSが組む -->
+<div class="modal-overlay" id="ai-modal" style="display:none" onclick="onAiOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">聞く相手を選ぶ</div>
+    <div class="ai-note" id="ai-note"></div>
+    <div class="ai-list" id="ai-list"></div>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeAiModal()">閉じる</button>
+      <button class="action-btn confirm-btn" onclick="saveAiSelection()">保存</button>
     </div>
   </div>
 </div>
@@ -77,7 +95,7 @@
 <div class="modal-overlay" id="token-modal" style="display:none" onclick="onTokenOverlayClick(event)">
   <div class="modal">
     <div class="modal-title">Claude認証が必要です</div>
-    <div class="claude-modal-body">
+    <div class="answer-body">
       トークンが未設定か、期限切れの可能性があります。<br><br>
       ブラウザやターミナルが使える端末で以下を実行し、表示されたトークンをそのまま貼り付けてください。<br><br>
       <code>claude setup-token</code>

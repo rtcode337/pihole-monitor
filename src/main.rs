@@ -1,6 +1,8 @@
 //! エントリーポイント。設定を読み、DBを開き、ルーターを組み立てて待ち受ける。
 
+mod ai;
 mod api;
+mod chiezo;
 mod claude;
 mod config;
 mod db;
@@ -13,8 +15,8 @@ use anyhow::{Context, Result};
 use axum::Router;
 use tracing_subscriber::EnvFilter;
 
+use crate::ai::Ai;
 use crate::api::AppState;
-use crate::claude::ClaudeClient;
 use crate::config::{Config, PORT};
 use crate::db::Db;
 use crate::pihole::PiholeClient;
@@ -36,13 +38,16 @@ async fn main() -> Result<()> {
         pihole_base_url = %config.pihole_base_url,
         query_limit = config.pihole_query_limit,
         db_path = %config.db_path.display(),
+        // 空なら「聞く相手は Claude Code(CLI ブリッジ)固定」の意味
+        chiezo_base_url = %config.chiezo_base_url,
         "設定を読み込んだ"
     );
 
+    let db = Db::open(&config.db_path)?;
     let state = AppState {
-        db: Db::open(&config.db_path)?,
+        ai: Ai::new(&config, db.clone())?,
+        db,
         pihole: PiholeClient::new(&config)?,
-        claude: ClaudeClient::new(&config)?,
     };
 
     let app = Router::new()

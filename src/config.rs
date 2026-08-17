@@ -6,9 +6,14 @@ use std::time::Duration;
 
 /// リッスンするポート。
 ///
-/// 6000ではなく6001。6000はX11用に予約されており、主要ブラウザ(Chrome/Firefox/Safari)が
-/// 「安全でないポート」として接続を拒否する(ERR_UNSAFE_PORT)ため使えない。
-pub const PORT: u16 = 6001;
+/// **7000番台に10刻みで割り当てる運用**(末尾0 = ブラウザで開くもの)に合わせた
+/// pihole-monitor の枠。ホスト側とコンテナ内で同じ番号にしてある ——
+/// composeの `"7060:7060"` を読むだけで対応が分かるようにするため。
+///
+/// **6000番台は使わない。** 6000はX11用に予約されており、主要ブラウザ
+/// (Chrome/Firefox/Safari)が「安全でないポート」として接続を拒否する
+/// (ERR_UNSAFE_PORT)。かつて6001を使っていたのはこれを避けるためだった。
+pub const PORT: u16 = 7060;
 
 /// CLI ブリッジの応答がこれらを含んでいたら認証エラーとみなし、
 /// 保存済みトークンを破棄して再入力を促す(CLI 自身の認証エラーは 502 の本文に出る)。
@@ -35,6 +40,12 @@ pub struct Config {
     pub db_path: PathBuf,
     /// CLI ブリッジ(chiezo-bridge)の URL。OpenAI 互換の口の根元まで。
     pub claude_bridge_url: String,
+    /// Chiezo(LAN 内の知識サーバー)の**ルート URL**。空なら使わない。
+    /// **`/v1` は付けない** —— 呼ぶ側が `/v1/ai/...` を足す。
+    pub chiezo_base_url: String,
+    /// Chiezo 越しの1回の生成の上限。相手は CLI や大きいモデルなので、
+    /// **ブリッジ経由(`claude_timeout`)より長めの既定にしてある**。
+    pub chiezo_timeout: Duration,
     /// ブリッジと共有するディレクトリ。ここに設定 DB を書き、ブリッジが読み取り専用で読む。
     pub state_dir: PathBuf,
     /// CLI を同梱していた頃のトークンの置き場(移行のためだけに残している)。
@@ -64,6 +75,11 @@ impl Config {
             claude_bridge_url: env_string("CLAUDE_BRIDGE_URL", "http://bridge:7013/v1")
                 .trim_end_matches('/')
                 .to_string(),
+            chiezo_base_url: env_string("CHIEZO_BASE_URL", "")
+                .trim()
+                .trim_end_matches('/')
+                .to_string(),
+            chiezo_timeout: Duration::from_secs(env_parse("CHIEZO_TIMEOUT", 180)),
             state_dir,
             claude_token_path: data_dir.join("claude_token"),
         }

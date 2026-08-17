@@ -11,7 +11,7 @@
 # 使い方:
 #   1. 「ここだけ編集」の置き場とPi-holeの接続先を、その環境の値に書き換える
 #   2. その内容を管理画面に貼り付けて起動する
-#   3. http://<ホスト>:6001/ を開く
+#   3. http://<ホスト>:7060/ を開く
 #
 # 非公開リポジトリのためGHCRのパッケージも非公開。pullする前に、そのホストで
 # `read:packages` スコープのPersonal Access Tokenを使って
@@ -49,10 +49,42 @@ x-app-env: &app-env
   PIHOLE_PASSWORD: ""
   # 取得するブロッククエリの件数(-1で全件)
   PIHOLE_QUERY_LIMIT: "-1"
-  # 「Claudeに聞く」1回あたりのタイムアウト秒数
+  # 「AIに聞く」でCLIブリッジ(Claude Code)に頼むときの1回あたりのタイムアウト秒数
   CLAUDE_TIMEOUT: "60"
   # CLIを動かすサイドカー。ホストへは公開していないのでサービス名で呼ぶ
   CLAUDE_BRIDGE_URL: "http://bridge:7013/v1"
+  # ---- ここだけ編集(任意): Chiezo(LAN内の知識サーバー)の**ルートURL** ----
+  # 入れると、聞く相手(Claude Code / Codex / …)を画面から選べる。鍵はChiezoが持っている。
+  # 使わないなら空文字("")——従来どおりCLIブリッジだけで動く。
+  # **`/v1` は付けない**(こちらが `/v1/ai/...` を足すので、付けると404になる)。
+  # 値は「**このコンテナから**Chiezoに届くアドレス」——別のホストならそのIP、
+  # 同じホストならLANのIP(`localhost` はコンテナ自身を指すので不可)。
+  # 届かないときは下の「同じホストでChiezoが動いているのに届かないとき」を見ること
+  CHIEZO_BASE_URL: ""
+  # Chiezo越しの1回の生成の上限(秒)。相手はCLIなので長めにしてある
+  CHIEZO_TIMEOUT: "180"
+
+# ---- 同じホストでChiezoが動いているのに届かないとき ----
+# コンテナから**ホストの公開ポートへ戻る**経路は、環境によっては塞がれている
+# (NASのファイアウォール等)。**そのときはChiezoのネットワークに相乗りする**
+# (ホストのポートを経由しない)。下の pihole-monitor サービスに networks を足し、
+# CHIEZO_BASE_URL を "http://chiezo-api:7010" にする:
+#
+#   services:
+#     pihole-monitor:
+#       networks: [default, chiezo]   # ← **default も必ず並べる**
+#   networks:
+#     chiezo:
+#       external: true
+#       name: chiezo_default          # ← chiezo 側の実際のネットワーク名
+#
+# 注意:
+# - **`networks:` を書くと既定のネットワークに自動で入らなくなる。** `default` を並べ忘れると
+#   bridge にも繋がらなくなり、「AIに聞く」がどちらの経路でも動かなくなる
+# - **ネットワーク名は環境で変わる。** `<プロジェクト名>_default` で、プロジェクト名は
+#   管理画面で付けたスタック名。`docker network ls` で実物を確認する
+# - `external: true` は**そのネットワークが既に在ること**が前提。Chiezoを同じホストで
+#   動かしていない環境でこれを書くと、本体が起動できなくなる(だから既定では書いていない)
 
 services:
   # 本体を起動する前にデータディレクトリの所有者を実行ユーザーに合わせる。
@@ -78,10 +110,10 @@ services:
     container_name: pihole-monitor
     environment: *app-env
     ports:
-      # host:container。6000はブラウザが「安全でないポート」として拒否する
-      # (X11用の予約。ERR_UNSAFE_PORT)ため使えないので6001にしている。
-      # LAN内からのみ見える状態にしておくこと
-      - "6001:6001"
+      # host:container。**7000番台に10刻みで割り当てる運用**の pihole-monitor 枠。
+      # 6000番台は使わない —— 6000はX11用の予約で、ブラウザが「安全でないポート」として
+      # 拒否する(ERR_UNSAFE_PORT)。LAN内からのみ見える状態にしておくこと
+      - "7060:7060"
     volumes:
       - type: bind
         source: *data-dir
@@ -89,7 +121,7 @@ services:
     user: *run-as
     restart: unless-stopped
 
-  # 「Claudeに聞く」で使うCLIを動かすサイドカー(chiezoリポジトリの**公開**イメージ。
+  # 「AIに聞く」でCLIブリッジを使うときのサイドカー(chiezoリポジトリの**公開**イメージ。
   # これだけは docker login 無しでpullできる)。**本体はCLIを持たない**。
   # **ホストへポートを公開しない** —— 認証が無いうえにトークンを読めるため。
   # 認証情報は state/settings.db 経由で渡す(画面から入れたトークンを本体が書く)
