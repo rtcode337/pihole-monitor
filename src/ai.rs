@@ -27,11 +27,22 @@ pub const BRIDGE_LABEL: &str = "Claude Code(CLIブリッジ)";
 
 /// 何を聞くか。**ドメイン名以外はここに全部書く** —— 相手ごとに文言が散ると、
 /// 切り替えたときに回答の違いが相手の差なのか指示の差なのか分からなくなる。
-const SYSTEM_PROMPT: &str = "あなたはDNSとネットワークに詳しい技術者です。\
-    Pi-holeの広告/トラッキングブロックリストによってブロックされたドメインについて、\
-    それがどのようなサービス・通信に関連するドメインで、なぜブロックリストに\
-    含まれている可能性が高いかを日本語で3〜5行程度で簡潔に説明してください。\
-    前置き・復唱・箇条書きの記号は書かず、説明の文章だけを書いてください。";
+///
+/// 出力は**一覧に並ぶメモ**なので1〜2文に抑えさせる(3〜5行あると読めない)。
+/// **番号で対応を返させる**(ドメイン名を書き写させると綴りが揺れて突き合わせできない)。
+const BULK_SYSTEM_PROMPT: &str = "あなたはDNSとネットワークに詳しい技術者です。\
+    Pi-holeの広告/トラッキングブロックリストによってブロックされた複数のドメインについて、\
+    それぞれが何のサービスに関連し、なぜブロックされていそうかを日本語で1〜2文に\
+    まとめてください。\
+    出力は次の形のJSONだけにし、説明・前置き・コードフェンスは書かないでください。\
+    {\"results\":[{\"n\":1,\"note\":\"…\"}]}\
+    n は入力の番号です。番号は必ず入力どおりに対応させ、ドメイン名は書かないでください。\
+    分からないドメインも推測せず、その旨を1文で書いてください。";
+
+/// 1回のまとめて質問に渡すドメインの上限。**多すぎると応答が崩れる** ——
+/// tech-antenna では200件を1回に詰めて300秒のタイムアウトを超え、まとめて失敗した。
+/// 画面はこの数ずつに区切って何度も呼ぶので、進捗が出るし途中まででも残る。
+pub const MAX_BULK_DOMAINS: usize = 10;
 
 /// 選んだ相手1つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,12 +79,14 @@ fn name_with_model(label: &str, model: Option<&str>) -> String {
     }
 }
 
-/// 回答1件。
-pub struct Answer {
-    pub text: String,
-    /// **誰が書いたか。** 相手を切り替えられる以上、これが無いと読み比べにならない。
-    /// Chiezo 経由では**応答が名乗ったモデル**を使う(「既定に任せる」で頼んだときに
-    /// 何が書いたのかを知る唯一の手がかり)。
+/// まとめて聞いた結果。
+pub struct BulkAnswer {
+    /// ドメイン → メモ。**答えが返らなかったドメインは入らない**
+    /// (画面が「聞けなかった件数」を出せるようにするため)。
+    pub notes: Vec<(String, String)>,
+    /// **誰が書いたか。** 相手を切り替えられる以上、これが無いと結果を読み分けられない。
+    /// **応答が名乗ったモデル**を優先する(「相手の既定に任せる」で頼んだときに、
+    /// 何が書いたのかを知る手がかりはそれだけ)。
     pub author: String,
 }
 
@@ -153,21 +166,18 @@ impl Ai {
         }
     }
 
-    /// 指定ドメインについて、選ばれている相手に説明を求める。
-    pub async fn ask_about_domain(&self, domain: &str) -> Result<Answer, AskError> {
-        let user_prompt = format!("ドメイン: {domain}");
-
+    /// 選ばれている相手に1往復投げて、本文と書き手の名前を受け取る。
+    /// **経路(Chiezo / CLI ブリッジ)の分岐はここだけ。**
+    async fn complete(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<(String, String), AskError> {
         // 選択が残っているのに Chiezo が未設定(URL を外した)なら、黙ってブリッジへ倒す ——
         // 答えが出ないより、従来の経路で答えが出るほうがよい
         let Some((chiezo, choice)) = self.chiezo.as_ref().zip(self.selection().await) else {
-            return self
-                .claude
-                .ask(SYSTEM_PROMPT, &user_prompt)
-                .await
-                .map(|text| Answer {
-                    text,
-                    author: BRIDGE_LABEL.to_string(),
-                });
+            let text = self.claude.ask(system_prompt, user_prompt).await?;
+            return Ok((text, BRIDGE_LABEL.to_string()));
         };
 
         let completion = chiezo
@@ -175,8 +185,8 @@ impl Ai {
                 &choice.backend,
                 choice.model.as_deref(),
                 choice.effort.as_deref(),
-                SYSTEM_PROMPT,
-                &user_prompt,
+                system_prompt,
+                user_prompt,
             )
             .await
             .map_err(AskError::Failed)?;
@@ -186,14 +196,84 @@ impl Ai {
         let label = completion.label.unwrap_or_else(|| choice.label.clone());
         let model = completion.model.or_else(|| choice.model.clone());
 
-        Ok(Answer {
-            text: completion.content,
-            author: name_with_model(&label, model.as_deref()),
-        })
+        Ok((
+            completion.content,
+            name_with_model(&label, model.as_deref()),
+        ))
+    }
+
+    /// 複数のドメインについて**1回の問い合わせで**まとめて聞く。
+    ///
+    /// **1件ずつ聞かない。** 相手が CLI だと呼び出し1回の固定費(ハーネスの入力)が大きく、
+    /// 47件を1件ずつ聞くと固定費を47回払うことになる。まとめて渡すこと自体が対策。
+    pub async fn ask_about_domains(&self, domains: &[String]) -> Result<BulkAnswer, AskError> {
+        if domains.is_empty() {
+            return Err(AskError::Failed("聞く対象がありません".to_string()));
+        }
+
+        // 番号付きで渡し、番号で返させる(ドメイン名を書き写させない)
+        let user_prompt = domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| format!("{}. {domain}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let (text, author) = self.complete(BULK_SYSTEM_PROMPT, &user_prompt).await?;
+        let notes = parse_bulk(&text, domains)
+            .map_err(|e| AskError::Failed(format!("{e}(相手: {author})")))?;
+
+        Ok(BulkAnswer { notes, author })
     }
 
     /// `claude setup-token` のトークンを保存する(CLI ブリッジ経由のときだけ要る)。
     pub fn save_token(&self, token: &str) -> anyhow::Result<()> {
         self.claude.save_token(token)
     }
+}
+
+/// まとめて聞いた応答を読む。**番号 → ドメイン**に付け直して返す。
+fn parse_bulk(text: &str, domains: &[String]) -> Result<Vec<(String, String)>, String> {
+    #[derive(Deserialize)]
+    struct BulkResponse {
+        #[serde(default)]
+        results: Vec<BulkItem>,
+    }
+
+    #[derive(Deserialize)]
+    struct BulkItem {
+        n: usize,
+        #[serde(default)]
+        note: String,
+    }
+
+    let json = extract_json(text).ok_or("応答にJSONが入っていない")?;
+    let parsed: BulkResponse =
+        serde_json::from_str(json).map_err(|e| format!("応答をJSONとして読めない: {e}"))?;
+
+    let notes = parsed
+        .results
+        .into_iter()
+        .filter_map(|item| {
+            // **範囲外の番号は捨てる**(LLM の応答をそのまま信じない)。
+            // 空のメモも捨てる —— 一覧に空行が並ぶだけ
+            let domain = domains.get(item.n.checked_sub(1)?)?;
+            let note = item.note.trim();
+            (!note.is_empty()).then(|| (domain.clone(), note.to_string()))
+        })
+        .collect::<Vec<_>>();
+
+    if notes.is_empty() {
+        return Err("応答にメモが1件も入っていない".to_string());
+    }
+    Ok(notes)
+}
+
+/// 応答から JSON の本体を切り出す。**前置きとコードフェンスを許して読む** ——
+/// 「JSONだけ」と指示しても説明を1行添えてくる応答はあり、そこで丸ごと捨てると
+/// そのぶんのメモが消える。
+fn extract_json(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (start < end).then(|| text[start..=end].trim())
 }

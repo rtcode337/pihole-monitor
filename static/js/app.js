@@ -1,7 +1,8 @@
 const COPY_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 const CHECK_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 const EDIT_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
-const AI_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l2.4 6.6 6.6 2.4-6.6 2.4L12 19.5l-2.4-6.6L3 10.5l6.6-2.4z"/></svg>`;
+const SUN_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MOON_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 
 let allDomains = [];
 let currentFilter = 'new';
@@ -9,6 +10,44 @@ let pendingDomain = null;
 let answerPendingDomain = null;
 // /api/ai の応答。相手の一覧・選択・繋がらない理由が入る（取れなければ null）
 let aiState = null;
+// まとめて聞いている間は true（同時に2回走らせない・実行中に閉じさせない）
+let bulkRunning = false;
+
+// 1リクエストで聞く件数。**サーバ側の MAX_BULK_DOMAINS と同じ値にすること**
+// （超えると 400 で断られる）。区切って何度も呼ぶので進捗が出せて、
+// 途中で失敗してもそこまでのメモは残る
+const BULK_CHUNK = 10;
+
+// ---- テーマ（ライト/ダーク） ----
+// 明示的に選んだらlocalStorageに残し、選んでいなければOSの設定に従う。
+// 描画前の当て込みは index.html の <head> にある（body側だと一瞬もう一方の色が出る）
+
+function effectiveTheme() {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === 'dark' || explicit === 'light') return explicit;
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function renderTheme() {
+  const dark = effectiveTheme() === 'dark';
+  const btn = document.getElementById('theme-btn');
+  // 出すのは**切り替わる先**の印。いまの状態を出すと「押したらどうなるか」が読めない
+  btn.innerHTML = dark ? SUN_ICON : MOON_ICON;
+  btn.title = dark ? 'ライトに切り替える' : 'ダークに切り替える';
+  // アドレスバー・タスクスイッチャーの色も合わせる（合わないと帯だけ暗いままになる）
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = dark ? '#0d1117' : '#ffffff';
+}
+
+function toggleTheme() {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch(e) { /* 保存できなくても切り替えは効く */ }
+  renderTheme();
+}
+
+// OS の設定に従っている間は、OS 側の切り替えにボタンの印も追従させる
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', renderTheme);
 
 function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -53,13 +92,17 @@ function setFilter(filter, event) {
   renderDomains();
 }
 
+// いまのフィルターで画面に出ているドメイン。描画と「まとめて聞く」の対象が
+// 同じ1か所から出るようにする（食い違うと、見えていない行にメモが付く）
+function filteredDomains() {
+  if (currentFilter === 'new') return allDomains.filter(d => !d.reviewed);
+  if (currentFilter === 'reviewed') return allDomains.filter(d => d.reviewed);
+  return allDomains;
+}
+
 function renderDomains() {
   const list = document.getElementById('domain-list');
-  const filtered = currentFilter === 'new'
-    ? allDomains.filter(d => !d.reviewed)
-    : currentFilter === 'reviewed'
-    ? allDomains.filter(d => d.reviewed)
-    : allDomains;
+  const filtered = filteredDomains();
 
   if (filtered.length === 0) {
     list.innerHTML = '<div class="empty"><div class="empty-icon">&#10003;</div>未確認のドメインはありません</div>';
@@ -73,12 +116,15 @@ function renderDomains() {
         <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
       </div>
-      <span class="badge ${d.reviewed ? 'reviewed' : 'new'}">${d.reviewed ? '確認済' : 'NEW'}</span>
-      <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askAi(this.dataset.domain)" title="このドメインについてAIに聞く">${AI_ICON} AIに聞く</button>
+      <!-- 未確認の行にバッジは出さない。**既読管理はしていないので「NEW」は嘘になる**
+           （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
+           「確認済」バッジの有無で足りる -->
+      ${d.reviewed ? '<span class="badge reviewed">確認済</span>' : ''}
+      <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
+      <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
       ${!d.reviewed
-        ? `<button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" onclick="openModal(this.dataset.domain)">確認済みにする</button>`
-        : `<button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="メモを書き直す">${EDIT_ICON}</button>
-           <button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
+        ? `<button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
+        : `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
       }
     </div>
   `).join('');
@@ -88,6 +134,9 @@ function openModal(domain, existingNote = '') {
   pendingDomain = domain;
   document.getElementById('modal-domain').textContent = domain;
   document.getElementById('modal-note').value = existingNote;
+  // 既に確認済みなら「確認済みにする」は出さない（押しても何も変わらないボタンを置かない）
+  const item = allDomains.find(d => d.domain === domain);
+  document.getElementById('modal-review-btn').hidden = !!(item && item.reviewed);
   document.getElementById('modal').style.display = 'flex';
   document.getElementById('modal-note').focus();
 }
@@ -101,56 +150,127 @@ function onOverlayClick(event) {
   if (event.target === document.getElementById('modal')) closeModal();
 }
 
-function openAnswerModal(domain) {
-  answerPendingDomain = domain;
-  document.getElementById('answer-modal-domain').textContent = domain;
-  const body = document.getElementById('answer-modal-body');
-  body.textContent = `${aiName()}に問い合わせ中...`;
-  body.className = 'answer-body loading-text';
-  document.getElementById('answer-modal-author').textContent = '';
-  const item = allDomains.find(d => d.domain === domain);
-  document.getElementById('answer-modal-note').value = item ? (item.note || '') : '';
-  document.getElementById('answer-modal').style.display = 'flex';
+
+// ---- まとめてAIに聞く ----
+// いま一覧に出ているドメインを BULK_CHUNK 件ずつAIに聞き、結果をメモとして残す。
+// **確認済みにはしない** —— 調べただけの段階と、人が確認した段階は別
+
+// 対象は「いま出ている行のうち、メモの無いもの」。**既にメモがある行は飛ばす**
+// （人が書いたメモをAIの文章で上書きしないため。聞き直したいなら、その行のメモを
+//   空にして保存すれば次の実行で対象に戻る）
+function bulkTargets() {
+  return filteredDomains().filter(d => !d.note || !d.note.trim()).map(d => d.domain);
 }
 
-function closeAnswerModal() {
-  document.getElementById('answer-modal').style.display = 'none';
-  answerPendingDomain = null;
+function openBulkModal() {
+  if (bulkRunning) { document.getElementById('bulk-modal').style.display = 'flex'; return; }
+  const targets = bulkTargets();
+  const shown = filteredDomains().length;
+  const note = document.getElementById('bulk-note');
+  note.className = 'bulk-note';
+  note.textContent = targets.length === 0
+    ? `いま出ている ${shown} 件はすべてメモがあります。聞き直したい行は、メモを空にして保存すると次の実行で対象に戻ります。`
+    : `いま出ている ${shown} 件のうち、メモの無い ${targets.length} 件を ${aiName()} に聞き、`
+      + `結果をメモとして残します（確認済みにはしません）。`
+      + `${BULK_CHUNK} 件ずつ順に聞くので、途中で失敗してもそこまでは残ります。`;
+  document.getElementById('bulk-log').innerHTML = '';
+  document.getElementById('bulk-run-btn').disabled = targets.length === 0;
+  document.getElementById('bulk-modal').style.display = 'flex';
 }
 
-function onAnswerOverlayClick(event) {
-  if (event.target === document.getElementById('answer-modal')) closeAnswerModal();
+function closeBulkModal() {
+  // 実行中は閉じさせない（閉じると進捗が見えなくなるだけで、処理は止まらない）
+  if (bulkRunning) return;
+  document.getElementById('bulk-modal').style.display = 'none';
 }
 
-async function askAi(domain) {
-  openAnswerModal(domain);
-  const body = document.getElementById('answer-modal-body');
-  const author = document.getElementById('answer-modal-author');
-  try {
-    const resp = await fetch('/api/ask', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domain})
-    });
-    const result = await resp.json();
-    if (result.success) {
-      body.textContent = result.answer;
-      body.className = 'answer-body';
-      // 応答が名乗った相手を出す（「相手の既定に任せる」で頼んだときは
-      // これだけが何が書いたかの手がかり）
-      author.textContent = result.author ? `— ${result.author}` : '';
-    } else if (result.error === 'token_required') {
-      // トークンが要るのはCLIブリッジ経由のときだけ
-      closeAnswerModal();
-      openTokenModal(domain);
-    } else {
-      body.textContent = `AIへの問い合わせに失敗しました（${result.error || '不明なエラー'}）`;
-      body.className = 'answer-body error-text';
+function onBulkOverlayClick(event) {
+  if (event.target === document.getElementById('bulk-modal')) closeBulkModal();
+}
+
+function bulkLog(message, kind) {
+  const log = document.getElementById('bulk-log');
+  const line = document.createElement('div');
+  line.className = `bulk-log-item ${kind || ''}`;
+  line.textContent = message;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function runBulkAsk() {
+  if (bulkRunning) return;
+  const targets = bulkTargets();
+  if (targets.length === 0) return;
+
+  bulkRunning = true;
+  const runBtn = document.getElementById('bulk-run-btn');
+  const closeBtn = document.getElementById('bulk-close-btn');
+  runBtn.disabled = true;
+  closeBtn.disabled = true;
+  document.getElementById('bulk-log').innerHTML = '';
+
+  let saved = 0;
+  let failedChunks = 0;
+  let author = '';
+
+  for (let i = 0; i < targets.length; i += BULK_CHUNK) {
+    const chunk = targets.slice(i, i + BULK_CHUNK);
+    const note = document.getElementById('bulk-note');
+    note.className = 'bulk-note';
+    note.textContent = `${i} / ${targets.length} 件おわり — ${chunk.length} 件を聞いています…`;
+
+    let result;
+    try {
+      const resp = await fetch('/api/ask-bulk', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({domains: chunk})
+      });
+      result = await resp.json();
+    } catch(e) {
+      result = {success: false, error: '通信に失敗しました'};
     }
-  } catch(e) {
-    body.textContent = 'AIへの問い合わせに失敗しました';
-    body.className = 'answer-body error-text';
+
+    if (result.error === 'token_required') {
+      // トークンが要るのはCLIブリッジ経由のとき。入れ直してもらう（残りは中断）
+      bulkRunning = false;
+      runBtn.disabled = false;
+      closeBtn.disabled = false;
+      document.getElementById('bulk-modal').style.display = 'none';
+      openTokenModal();
+      return;
+    }
+
+    if (result.success) {
+      author = result.author || author;
+      for (const entry of result.results) {
+        const item = allDomains.find(d => d.domain === entry.domain);
+        if (item) item.note = entry.note;
+        saved++;
+        bulkLog(`${entry.domain} — ${entry.note}`, 'done');
+      }
+      for (const domain of result.missing || []) {
+        bulkLog(`${domain} — 答えが返りませんでした`, 'failed');
+      }
+    } else {
+      failedChunks++;
+      // **1回の失敗で止めない**（相手が一度崩れた応答を返しても、残りは聞ける）
+      bulkLog(`${chunk.length} 件が失敗: ${result.error || '不明なエラー'}`, 'failed');
+    }
+    // サーバ側でメモは保存済み。押した人が結果を追えるよう、区切りごとに一覧へ反映する
+    renderDomains();
   }
+
+  bulkRunning = false;
+  runBtn.disabled = bulkTargets().length === 0;
+  closeBtn.disabled = false;
+
+  const note = document.getElementById('bulk-note');
+  note.className = failedChunks > 0 ? 'bulk-note error-text' : 'bulk-note';
+  note.textContent = `${targets.length} 件のうち ${saved} 件にメモを付けました`
+    + (author ? `（${author}）` : '')
+    + (failedChunks > 0 ? ` — ${failedChunks} 回分は失敗しました。もう一度実行すると残りだけを聞きます。` : '');
+  showToast(`${saved} 件にメモを付けました`, failedChunks > 0 ? 'error' : 'success');
 }
 
 // ---- 聞く相手の選択（Chiezo） ----
@@ -294,10 +414,7 @@ async function saveAiSelection() {
   }
 }
 
-let tokenPendingDomain = null;
-
-function openTokenModal(domain) {
-  tokenPendingDomain = domain;
+function openTokenModal() {
   document.getElementById('token-input').value = '';
   document.getElementById('token-modal').style.display = 'flex';
   document.getElementById('token-input').focus();
@@ -305,7 +422,6 @@ function openTokenModal(domain) {
 
 function closeTokenModal() {
   document.getElementById('token-modal').style.display = 'none';
-  tokenPendingDomain = null;
 }
 
 function onTokenOverlayClick(event) {
@@ -315,7 +431,6 @@ function onTokenOverlayClick(event) {
 async function submitClaudeToken() {
   const token = document.getElementById('token-input').value.trim();
   if (!token) return;
-  const domain = tokenPendingDomain;
   try {
     const resp = await fetch('/api/claude-token', {
       method: 'POST',
@@ -326,7 +441,9 @@ async function submitClaudeToken() {
     if (result.success) {
       closeTokenModal();
       showToast('トークンを保存しました', 'success');
-      if (domain) askAi(domain);
+      // **自動では実行しない**（LLMの枠を使う操作を、保存の副作用で走らせない）。
+      // 対象と件数を出すモーダルに戻して、押し直せるようにする
+      openBulkModal();
     } else {
       showToast('トークンの保存に失敗しました', 'error');
     }
@@ -365,6 +482,38 @@ async function unmarkReviewed(domain) {
   }
 }
 
+// メモだけ保存する。確認済みかどうかは変えない
+async function submitNote() {
+  if (!pendingDomain) return;
+  const domain = pendingDomain;
+  const note = document.getElementById('modal-note').value.trim();
+  closeModal();
+  await saveNote(domain, note, `${domain} のメモを保存しました`);
+}
+
+// メモをサーバへ書き、手元の一覧にも反映する（一覧を読み直さずに済ませる）
+async function saveNote(domain, note, successMessage) {
+  try {
+    const resp = await fetch('/api/note', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({domain, note})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      const item = allDomains.find(d => d.domain === domain);
+      if (item) item.note = note;
+      renderDomains();
+      showToast(successMessage, 'success');
+      return true;
+    }
+    showToast('メモの保存に失敗しました', 'error');
+  } catch(e) {
+    showToast('エラーが発生しました', 'error');
+  }
+  return false;
+}
+
 async function submitReview() {
   if (!pendingDomain) return;
   const domain = pendingDomain;
@@ -392,33 +541,6 @@ async function submitReview() {
   }
 }
 
-async function submitReviewFromAnswerModal() {
-  if (!answerPendingDomain) return;
-  const domain = answerPendingDomain;
-  const note = document.getElementById('answer-modal-note').value.trim();
-
-  try {
-    const resp = await fetch('/api/review', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domain, note})
-    });
-    const result = await resp.json();
-    if (result.success) {
-      const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = true; item.note = note; }
-      updateStats();
-      renderDomains();
-      closeAnswerModal();
-      showToast(`${domain} を確認済みにしました`, 'success');
-    } else {
-      showToast('失敗しました', 'error');
-    }
-  } catch(e) {
-    showToast('エラーが発生しました', 'error');
-  }
-}
-
 function showToast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -427,10 +549,9 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeAnswerModal(); closeTokenModal(); closeAiModal(); }
+  if (e.key === 'Escape') { closeModal(); closeTokenModal(); closeAiModal(); closeBulkModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
-    if (document.getElementById('modal').style.display !== 'none') submitReview();
-    if (document.getElementById('answer-modal').style.display !== 'none') submitReviewFromAnswerModal();
+    if (document.getElementById('modal').style.display !== 'none') submitNote();
     if (document.getElementById('token-modal').style.display !== 'none') submitClaudeToken();
     if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();
   }
@@ -444,5 +565,6 @@ document.getElementById('ai-list').addEventListener('change', e => {
   if (radio) radio.checked = true;
 });
 
+renderTheme();
 loadDomains();
 loadAi();

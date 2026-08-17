@@ -1,14 +1,105 @@
+/* 色は全部ここのカスタムプロパティにまとめてある。**個々の規則に生の色を書かないこと**
+   —— 1か所で調整できなくなるし、ライト/ダークの片方だけ直してしまう。
+
+   テーマの決まり方は3通り:
+     1. 明示的に選んだ    → html[data-theme="light|dark"](localStorage に残る)
+     2. 選んでいない      → OS の設定(prefers-color-scheme)に従う
+     3. どちらも無い      → 下の :root の値(= ダーク。このアプリの既定の見た目)
+
+   **ライトの値は2か所に書いてある**(OS 追従用のメディアクエリと、明示指定用の
+   属性セレクタ)。CSS では「メディアクエリ or 属性」を1つの規則にまとめられないため。
+   **片方だけ直さないこと。** */
+:root {
+  /* ダーク(既定) */
+  color-scheme: dark;
+  --c-bg: #0d1117;
+  --c-surface: #161b22;
+  --c-border: #21262d;
+  --c-border-strong: #30363d;
+  --c-text: #c9d1d9;
+  --c-text-strong: #f0f6fc;
+  --c-muted: #8b949e;
+  --c-dim: #484f58;
+  --c-blue: #58a6ff;
+  --c-blue-border: #388bfd;
+  --c-blue-bg: #1a2535;
+  --c-blue-bg-strong: #1f3a5c;
+  --c-blue-bg-hover: #264a7a;
+  --c-red: #f85149;
+  --c-red-border: #da3633;
+  --c-red-bg: #3d1f1f;
+  --c-amber: #d9a066;
+  --c-amber-border: #6e4a2e;
+  --c-amber-bg: #3a2a1a;
+  --c-green: #3fb950;
+  --c-overlay: rgba(0, 0, 0, 0.7);
+}
+
+/* OS がライトで、かつダークを明示していないとき */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --c-bg: #ffffff;
+    --c-surface: #f6f8fa;
+    --c-border: #d8dee4;
+    --c-border-strong: #afb8c1;
+    --c-text: #1f2328;
+    --c-text-strong: #010409;
+    --c-muted: #59636e;
+    --c-dim: #818b98;
+    --c-blue: #0969da;
+    --c-blue-border: #54aeff;
+    --c-blue-bg: #ddf4ff;
+    --c-blue-bg-strong: #ddf4ff;
+    --c-blue-bg-hover: #b6e3ff;
+    --c-red: #cf222e;
+    --c-red-border: #ff8182;
+    --c-red-bg: #ffebe9;
+    --c-amber: #8a6500;
+    --c-amber-border: #d4a72c;
+    --c-amber-bg: #fff8c5;
+    --c-green: #1a7f37;
+    --c-overlay: rgba(31, 35, 40, 0.45);
+  }
+}
+
+/* ライトを明示的に選んだとき(OS の設定より優先する) */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --c-bg: #ffffff;
+  --c-surface: #f6f8fa;
+  --c-border: #d8dee4;
+  --c-border-strong: #afb8c1;
+  --c-text: #1f2328;
+  --c-text-strong: #010409;
+  --c-muted: #59636e;
+  --c-dim: #818b98;
+  --c-blue: #0969da;
+  --c-blue-border: #54aeff;
+  --c-blue-bg: #ddf4ff;
+  --c-blue-bg-strong: #ddf4ff;
+  --c-blue-bg-hover: #b6e3ff;
+  --c-red: #cf222e;
+  --c-red-border: #ff8182;
+  --c-red-bg: #ffebe9;
+  --c-amber: #8a6500;
+  --c-amber-border: #d4a72c;
+  --c-amber-bg: #fff8c5;
+  --c-green: #1a7f37;
+  --c-overlay: rgba(31, 35, 40, 0.45);
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--c-bg);
+  color: var(--c-text);
   min-height: 100vh;
 }
 
 header {
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--c-border);
   padding: 20px 32px;
   display: flex;
   align-items: center;
@@ -19,49 +110,49 @@ header {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #f85149;
-  box-shadow: 0 0 8px #f85149;
+  background: var(--c-red);
+  box-shadow: 0 0 8px var(--c-red);
 }
 
 header h1 {
   font-size: 14px;
   font-weight: 400;
-  color: #8b949e;
+  color: var(--c-muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-header h1 span { color: #c9d1d9; }
+header h1 span { color: var(--c-text); }
 
 .stats {
   display: flex;
   gap: 1px;
   padding: 0 32px;
   margin: 24px 0;
-  background: #21262d;
-  border-top: 1px solid #21262d;
-  border-bottom: 1px solid #21262d;
+  background: var(--c-border);
+  border-top: 1px solid var(--c-border);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .stat {
   flex: 1;
   padding: 16px 24px;
-  background: #0d1117;
+  background: var(--c-bg);
 }
 
 .stat-value {
   font-size: 28px;
   font-weight: 300;
-  color: #f0f6fc;
+  color: var(--c-text-strong);
   line-height: 1;
 }
 
-.stat-value.alert { color: #f85149; }
-.stat-value.ok { color: #58a6ff; }
+.stat-value.alert { color: var(--c-red); }
+.stat-value.ok { color: var(--c-blue); }
 
 .stat-label {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--c-muted);
   margin-top: 4px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -73,14 +164,17 @@ header h1 span { color: #c9d1d9; }
   display: flex;
   gap: 8px;
   align-items: center;
+  /* ボタンが5つ並ぶので、狭い画面では折り返させる ——
+     はみ出させると画面の外に隠れて気づけない */
+  flex-wrap: wrap;
 }
 
 .filter-btn {
   padding: 6px 14px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--c-border-strong);
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--c-muted);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -89,25 +183,25 @@ header h1 span { color: #c9d1d9; }
 }
 
 .filter-btn.active {
-  background: #21262d;
-  color: #c9d1d9;
-  border-color: #8b949e;
+  background: var(--c-border);
+  color: var(--c-text);
+  border-color: var(--c-muted);
 }
 
 .refresh-btn {
   margin-left: auto;
   padding: 6px 14px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--c-border-strong);
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--c-muted);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
-.refresh-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.refresh-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
 .domain-list {
   padding: 0 32px 32px;
@@ -118,13 +212,13 @@ header h1 span { color: #c9d1d9; }
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   margin-bottom: 4px;
   transition: border-color 0.15s;
 }
 
-.domain-item:hover { border-color: #30363d; }
+.domain-item:hover { border-color: var(--c-border-strong); }
 
 .status-dot {
   width: 6px;
@@ -133,8 +227,8 @@ header h1 span { color: #c9d1d9; }
   flex-shrink: 0;
 }
 
-.status-dot.new { background: #f85149; box-shadow: 0 0 6px #f85149; }
-.status-dot.reviewed { background: #58a6ff; }
+.status-dot.new { background: var(--c-red); box-shadow: 0 0 6px var(--c-red); }
+.status-dot.reviewed { background: var(--c-blue); }
 
 .domain-info {
   flex: 1;
@@ -143,7 +237,7 @@ header h1 span { color: #c9d1d9; }
 
 .domain-name {
   font-size: 13px;
-  color: #c9d1d9;
+  color: var(--c-text);
   word-break: break-all;
   position: relative;
   display: inline-block;
@@ -151,12 +245,12 @@ header h1 span { color: #c9d1d9; }
 
 .domain-count {
   font-size: 11px;
-  color: #484f58;
+  color: var(--c-dim);
 }
 
 .domain-note {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--c-muted);
   margin-top: 3px;
   word-break: break-all;
 }
@@ -171,15 +265,9 @@ header h1 span { color: #c9d1d9; }
 }
 
 .badge.reviewed {
-  background: #1a2535;
-  color: #58a6ff;
-  border: 1px solid #388bfd;
-}
-
-.badge.new {
-  background: #3d1f1f;
-  color: #f85149;
-  border: 1px solid #da3633;
+  background: var(--c-blue-bg);
+  color: var(--c-blue);
+  border: 1px solid var(--c-blue-border);
 }
 
 .action-btn {
@@ -194,41 +282,30 @@ header h1 span { color: #c9d1d9; }
 }
 
 .review-btn {
-  border: 1px solid #388bfd;
+  border: 1px solid var(--c-blue-border);
   background: transparent;
-  color: #58a6ff;
+  color: var(--c-blue);
 }
 
-.review-btn:hover { background: #1f3a5c; }
+.review-btn:hover { background: var(--c-blue-bg-strong); }
 
 .unreview-btn {
-  border: 1px solid #30363d;
+  border: 1px solid var(--c-border-strong);
   background: transparent;
-  color: #8b949e;
+  color: var(--c-muted);
 }
 
-.unreview-btn:hover { color: #c9d1d9; border-color: #8b949e; }
-
-.ask-ai-btn {
-  border: 1px solid #6e4a2e;
-  background: transparent;
-  color: #d9a066;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.ask-ai-btn:hover { background: #3a2a1a; }
+.unreview-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
 /* いま聞く相手を名前ごと出すボタン（押すと選択のモーダルが開く）。
    更新ボタンと並べて右端に寄せる */
 .ai-btn {
   margin-left: auto;
   padding: 6px 14px;
-  border: 1px solid #6e4a2e;
+  border: 1px solid var(--c-amber-border);
   border-radius: 4px;
   background: transparent;
-  color: #d9a066;
+  color: var(--c-amber);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -239,15 +316,15 @@ header h1 span { color: #c9d1d9; }
   white-space: nowrap;
 }
 
-.ai-btn:hover { background: #3a2a1a; }
+.ai-btn:hover { background: var(--c-amber-bg); }
 
 /* 更新ボタンは .ai-btn が右端を取ったあとに続く */
 .ai-btn + .refresh-btn { margin-left: 0; }
 
-.answer-body {
+.modal-body {
   font-size: 12px;
   line-height: 1.7;
-  color: #c9d1d9;
+  color: var(--c-text);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 40vh;
@@ -255,41 +332,75 @@ header h1 span { color: #c9d1d9; }
   margin-bottom: 16px;
 }
 
-.answer-body.loading-text {
-  color: #8b949e;
+.modal-body.loading-text {
+  color: var(--c-muted);
 }
 
-.answer-body.error-text {
-  color: #f85149;
+.modal-body.error-text {
+  color: var(--c-red);
 }
 
-.answer-body code {
-  background: #21262d;
+.modal-body code {
+  background: var(--c-border);
   padding: 2px 6px;
   border-radius: 4px;
 }
 
-/* 誰が書いたか。回答の下に小さく出す（本文と混ぜない） */
-.answer-author {
-  font-size: 11px;
-  color: #484f58;
-  margin: -8px 0 16px;
-  word-break: break-word;
+/* ---- まとめてAIに聞く ---- */
+
+.bulk-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--c-amber-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-amber);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+
+.bulk-btn:hover { background: var(--c-amber-bg); }
+
+.bulk-note {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--c-muted);
+  margin-bottom: 12px;
+}
+
+.bulk-note.error-text { color: var(--c-red); }
+
+/* 進んだぶんを1行ずつ積む。**画面から溢れないよう頭打ちにして中でスクロールさせる** */
+.bulk-log {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--c-dim);
+  max-height: 35vh;
+  overflow-y: auto;
+  margin-bottom: 16px;
+  word-break: break-all;
+}
+
+.bulk-log-item.done { color: var(--c-muted); }
+.bulk-log-item.failed { color: var(--c-red); }
 
 /* ---- 聞く相手の選択 ---- */
 
 .ai-note {
   font-size: 11px;
   line-height: 1.7;
-  color: #8b949e;
+  color: var(--c-muted);
   margin-bottom: 12px;
 }
 
-.ai-note.error-text { color: #f85149; }
+.ai-note.error-text { color: var(--c-red); }
 
 .ai-note code {
-  background: #21262d;
+  background: var(--c-border);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -307,12 +418,12 @@ header h1 span { color: #c9d1d9; }
   gap: 12px;
   flex-wrap: wrap;
   padding: 10px 12px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   margin-bottom: 4px;
 }
 
-.ai-row:hover { border-color: #30363d; }
+.ai-row:hover { border-color: var(--c-border-strong); }
 
 /* ラジオと名前だけを label に入れる。select を label の中に置くと、
    ドロップダウンを触るだけでラジオが動いてしまう */
@@ -327,7 +438,7 @@ header h1 span { color: #c9d1d9; }
 
 .ai-row-name {
   font-size: 13px;
-  color: #c9d1d9;
+  color: var(--c-text);
   word-break: break-word;
 }
 
@@ -340,29 +451,29 @@ header h1 span { color: #c9d1d9; }
 
 .ai-row-hint {
   font-size: 10px;
-  color: #484f58;
+  color: var(--c-dim);
 }
 
 .ai-select {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
   border-radius: 4px;
-  color: #c9d1d9;
+  color: var(--c-text);
   font-family: inherit;
   font-size: 11px;
   padding: 4px 6px;
   max-width: 100%;
 }
 
-.ai-select:focus { outline: none; border-color: #58a6ff; }
+.ai-select:focus { outline: none; border-color: var(--c-blue); }
 
 .edit-note-btn {
-  border: 1px solid #30363d;
+  border: 1px solid var(--c-border-strong);
   background: transparent;
-  color: #8b949e;
+  color: var(--c-muted);
 }
 
-.edit-note-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.edit-note-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
 .copy-btn {
   position: absolute;
@@ -370,7 +481,7 @@ header h1 span { color: #c9d1d9; }
   right: -16px;
   border: none;
   background: transparent;
-  color: #484f58;
+  color: var(--c-dim);
   cursor: pointer;
   padding: 0;
   display: flex;
@@ -380,13 +491,13 @@ header h1 span { color: #c9d1d9; }
 }
 
 .domain-item:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { color: #8b949e; }
-.copy-btn.copied { color: #3fb950; opacity: 1; }
+.copy-btn:hover { color: var(--c-muted); }
+.copy-btn.copied { color: var(--c-green); opacity: 1; }
 
 .empty {
   text-align: center;
   padding: 64px;
-  color: #8b949e;
+  color: var(--c-muted);
   font-size: 13px;
 }
 
@@ -399,7 +510,7 @@ header h1 span { color: #c9d1d9; }
 .loading {
   text-align: center;
   padding: 64px;
-  color: #8b949e;
+  color: var(--c-muted);
   font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -418,13 +529,13 @@ header h1 span { color: #c9d1d9; }
 }
 
 .toast.show { opacity: 1; }
-.toast.success { background: #1a2535; color: #58a6ff; border: 1px solid #388bfd; }
-.toast.error { background: #3d1f1f; color: #f85149; border: 1px solid #da3633; }
+.toast.success { background: var(--c-blue-bg); color: var(--c-blue); border: 1px solid var(--c-blue-border); }
+.toast.error { background: var(--c-red-bg); color: var(--c-red); border: 1px solid var(--c-red-border); }
 
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--c-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -432,8 +543,8 @@ header h1 span { color: #c9d1d9; }
 }
 
 .modal {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
   border-radius: 8px;
   padding: 24px;
   width: 480px;
@@ -442,7 +553,7 @@ header h1 span { color: #c9d1d9; }
 
 .modal-title {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--c-muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-bottom: 8px;
@@ -450,17 +561,17 @@ header h1 span { color: #c9d1d9; }
 
 .modal-domain {
   font-size: 14px;
-  color: #c9d1d9;
+  color: var(--c-text);
   margin-bottom: 16px;
   word-break: break-all;
 }
 
 .modal-note {
   width: 100%;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
   border-radius: 4px;
-  color: #c9d1d9;
+  color: var(--c-text);
   font-family: inherit;
   font-size: 12px;
   padding: 10px;
@@ -469,8 +580,8 @@ header h1 span { color: #c9d1d9; }
   margin-bottom: 16px;
 }
 
-.modal-note::placeholder { color: #484f58; }
-.modal-note:focus { outline: none; border-color: #58a6ff; }
+.modal-note::placeholder { color: var(--c-dim); }
+.modal-note:focus { outline: none; border-color: var(--c-blue); }
 
 .modal-actions {
   display: flex;
@@ -478,18 +589,24 @@ header h1 span { color: #c9d1d9; }
   justify-content: flex-end;
 }
 
-.cancel-btn {
-  border: 1px solid #30363d;
-  background: transparent;
-  color: #8b949e;
+.action-btn:disabled,
+.bulk-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.cancel-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.cancel-btn {
+  border: 1px solid var(--c-border-strong);
+  background: transparent;
+  color: var(--c-muted);
+}
+
+.cancel-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
 .confirm-btn {
-  border: 1px solid #388bfd;
-  background: #1f3a5c;
-  color: #58a6ff;
+  border: 1px solid var(--c-blue-border);
+  background: var(--c-blue-bg-strong);
+  color: var(--c-blue);
 }
 
-.confirm-btn:hover { background: #264a7a; }
+.confirm-btn:hover { background: var(--c-blue-bg-hover); }

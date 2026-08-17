@@ -12,6 +12,16 @@
 <meta name="apple-mobile-web-app-title" content="Pi-hole Mon">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<script>
+// 選んだテーマを**描画の前**に当てる。body の側で当てると、一瞬もう一方の色が出てしまう
+// （app.js は末尾で読み込まれるため）。保存が無ければ data-theme を付けず、OS の設定に従う
+(function () {
+  try {
+    var t = localStorage.getItem('theme');
+    if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+  } catch (e) { /* localStorage が使えない環境ではOSの設定に従う */ }
+})();
+</script>
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -19,6 +29,8 @@
 <header>
   <div class="logo"></div>
   <h1>Pi-hole <span>Monitor</span></h1>
+  <!-- 中身（太陽/月）は app.js が入れる。押すと切り替わる先の印を出す -->
+  <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" aria-label="テーマを切り替える"></button>
 </header>
 
 <div class="stats">
@@ -42,6 +54,7 @@
   <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
   <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
        押す前に知りたいので、名前を隠して歯車だけにはしない -->
+  <button class="bulk-btn" onclick="openBulkModal()" title="いま一覧に出ているドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
   <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
@@ -54,27 +67,28 @@
 
 <div class="modal-overlay" id="modal" style="display:none" onclick="onOverlayClick(event)">
   <div class="modal">
-    <div class="modal-title">確認済みにする</div>
+    <div class="modal-title">メモ</div>
     <div class="modal-domain" id="modal-domain"></div>
-    <textarea id="modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
+    <textarea id="modal-note" class="modal-note" placeholder="メモ（確認済みにしなくても残せます）"></textarea>
     <div class="modal-actions">
       <button class="action-btn cancel-btn" onclick="closeModal()">キャンセル</button>
-      <button class="action-btn confirm-btn" onclick="submitReview()">確認済みにする</button>
+      <!-- メモだけ残すのと、確認済みにするのは別の操作。
+           確認済みのドメインには「確認済みにする」を出さない（app.js が隠す） -->
+      <button class="action-btn review-btn" onclick="submitNote()">メモを保存</button>
+      <button class="action-btn confirm-btn" id="modal-review-btn" onclick="submitReview()">確認済みにする</button>
     </div>
   </div>
 </div>
 
-<div class="modal-overlay" id="answer-modal" style="display:none" onclick="onAnswerOverlayClick(event)">
+<!-- まとめてAIに聞く。対象と進捗はJSが組む -->
+<div class="modal-overlay" id="bulk-modal" style="display:none" onclick="onBulkOverlayClick(event)">
   <div class="modal">
-    <div class="modal-title">AIに聞く</div>
-    <div class="modal-domain" id="answer-modal-domain"></div>
-    <div class="answer-body" id="answer-modal-body"></div>
-    <!-- 誰が書いたか。相手を切り替えられるので、これが無いと読み比べにならない -->
-    <div class="answer-author" id="answer-modal-author"></div>
-    <textarea id="answer-modal-note" class="modal-note" placeholder="確認メモ（任意）"></textarea>
+    <div class="modal-title">まとめてAIに聞く</div>
+    <div class="bulk-note" id="bulk-note"></div>
+    <div class="bulk-log" id="bulk-log"></div>
     <div class="modal-actions">
-      <button class="action-btn cancel-btn" onclick="closeAnswerModal()">閉じる</button>
-      <button class="action-btn confirm-btn" onclick="submitReviewFromAnswerModal()">確認済みにする</button>
+      <button class="action-btn cancel-btn" id="bulk-close-btn" onclick="closeBulkModal()">閉じる</button>
+      <button class="action-btn confirm-btn" id="bulk-run-btn" onclick="runBulkAsk()">実行</button>
     </div>
   </div>
 </div>
@@ -95,8 +109,9 @@
 <div class="modal-overlay" id="token-modal" style="display:none" onclick="onTokenOverlayClick(event)">
   <div class="modal">
     <div class="modal-title">Claude認証が必要です</div>
-    <div class="answer-body">
-      トークンが未設定か、期限切れの可能性があります。<br><br>
+    <div class="modal-body">
+      トークンが未設定か、期限切れの可能性があります。<br>
+      （Chiezo の相手を選んでいるときは不要です）<br><br>
       ブラウザやターミナルが使える端末で以下を実行し、表示されたトークンをそのまま貼り付けてください。<br><br>
       <code>claude setup-token</code>
     </div>

@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::ai::{Ai, AiChoice, AskError};
+use crate::ai::{Ai, AiChoice, AskError, MAX_BULK_DOMAINS};
 use crate::db::Db;
 use crate::pihole::PiholeClient;
 
@@ -27,9 +27,13 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/domains", get(domains))
         .route("/api/review", post(review_post).delete(review_delete))
-        // **`/api/ask-claude` ではない。** 答える相手は画面から切り替えられるので、
-        // 名前に相手を入れると Chiezo 越しの Codex に聞いたときに嘘になる
-        .route("/api/ask", post(ask))
+        // **メモは確認済みと独立している。** 確認済みにしないと残せないと、
+        // 「まだ判断していないが調べた内容は残したい」が表せない
+        .route("/api/note", post(note_post))
+        // **1件ずつ聞く口は持たない。** 行ごとのボタンをやめたので、聞くのは
+        // 「まとめて聞く」だけ —— 呼ばれない口を残すと、画面から辿れない機能が
+        // 文書にだけ残る
+        .route("/api/ask-bulk", post(ask_bulk))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -47,11 +51,6 @@ struct ReviewRequest {
     domain: Option<String>,
     #[serde(default)]
     note: String,
-}
-
-#[derive(Deserialize)]
-struct AskRequest {
-    domain: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,30 +73,34 @@ async fn domains(State(state): State<AppState>) -> Response {
         }
     };
 
-    let reviewed = match state.db.reviewed_domains().await {
-        Ok(reviewed) => reviewed,
-        Err(e) => return internal_error(e, "確認済みドメインを読み出せない"),
+    let records = match state.db.records().await {
+        Ok(records) => records,
+        Err(e) => return internal_error(e, "ドメインの記録を読み出せない"),
     };
 
     let blocked_names: HashSet<&String> = blocked.keys().collect();
     let mut entries: Vec<DomainEntry> = blocked
         .iter()
-        .map(|(domain, count)| DomainEntry {
-            domain: domain.clone(),
-            count: *count,
-            reviewed: reviewed.contains_key(domain),
-            note: reviewed.get(domain).cloned().unwrap_or_default(),
+        .map(|(domain, count)| {
+            let record = records.get(domain);
+            DomainEntry {
+                domain: domain.clone(),
+                count: *count,
+                reviewed: record.is_some_and(|r| r.reviewed),
+                note: record.map(|r| r.note.clone()).unwrap_or_default(),
+            }
         })
         .collect();
 
-    // 直近のブロック済みクエリに出てこない確認済みドメインも、件数0として一覧に残す
-    for (domain, note) in &reviewed {
+    // 直近のブロック済みクエリに出てこない記録も、件数0として一覧に残す
+    // (確認済みだけでなく**メモだけの行も残す** —— 調べた内容を画面から消さないため)
+    for (domain, record) in &records {
         if !blocked_names.contains(domain) {
             entries.push(DomainEntry {
                 domain: domain.clone(),
                 count: 0,
-                reviewed: true,
-                note: note.clone(),
+                reviewed: record.reviewed,
+                note: record.note.clone(),
             });
         }
     }
@@ -125,43 +128,90 @@ async fn review_post(State(state): State<AppState>, Json(req): Json<ReviewReques
     }
 }
 
-/// 未確認に戻す。
+/// 未確認に戻す。**メモは消さない**(メモが空の行だけ消える)。
 async fn review_delete(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
     let Some(domain) = non_empty(req.domain) else {
         return bad_request("domain required");
     };
-    match state.db.delete_reviewed(domain).await {
+    match state.db.unmark_reviewed(domain).await {
         Ok(()) => success(),
         Err(e) => internal_error(e, "未確認に戻せない"),
     }
 }
 
-/// 指定ドメインについて、選ばれているAIに問い合わせる。
-async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Response {
+/// メモだけ保存する(確認済みかどうかは変えない)。
+async fn note_post(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
     let Some(domain) = non_empty(req.domain) else {
         return bad_request("domain required");
     };
-    match state.ai.ask_about_domain(&domain).await {
-        // **誰が書いたかを一緒に返す。** 相手を切り替えられるので、
-        // 回答だけ返すと画面がどのAIの答えを出しているのか言えない
-        Ok(answer) => Json(json!({
-            "success": true,
-            "answer": answer.text,
-            "author": answer.author,
-        }))
-        .into_response(),
-        // フロントは token_required を見てトークン入力モーダルに切り替える
-        Err(AskError::TokenRequired) => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "success": false, "error": "token_required" })),
-        )
-            .into_response(),
-        Err(AskError::Failed(message)) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "success": false, "error": message })),
-        )
-            .into_response(),
+    match state.db.save_note(domain, req.note).await {
+        Ok(()) => success(),
+        Err(e) => internal_error(e, "メモを保存できない"),
     }
+}
+
+#[derive(Deserialize)]
+struct BulkAskRequest {
+    #[serde(default)]
+    domains: Vec<String>,
+}
+
+/// まとめて聞いて、結果をそのままメモに書き戻す。
+///
+/// **区切るのは画面側**(`MAX_BULK_DOMAINS` ずつ何度も呼ぶ)。1回のリクエストを
+/// 短く保つと進捗が出せて、途中で失敗しても**そこまでのメモは残る** ——
+/// 全件を1リクエストにすると、最後まで待たされたうえに落ちたら何も残らない。
+async fn ask_bulk(State(state): State<AppState>, Json(req): Json<BulkAskRequest>) -> Response {
+    let mut seen = HashSet::new();
+    let domains: Vec<String> = req
+        .domains
+        .into_iter()
+        .filter_map(|d| non_empty(Some(d)))
+        .filter(|d| seen.insert(d.clone()))
+        .collect();
+
+    if domains.is_empty() {
+        return bad_request("domains required");
+    }
+    if domains.len() > MAX_BULK_DOMAINS {
+        // 黙って切り詰めない —— 切った分が「聞いたのにメモが付かない」形で表に出る
+        return bad_request("1回に聞ける件数を超えています");
+    }
+
+    let answer = match state.ai.ask_about_domains(&domains).await {
+        Ok(answer) => answer,
+        Err(AskError::TokenRequired) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "success": false, "error": "token_required" })),
+            )
+                .into_response();
+        }
+        Err(AskError::Failed(message)) => return bad_gateway(&message),
+    };
+
+    // **書き戻しは1トランザクション**。ここで失敗したら聞き直しになるので、
+    // 半分だけ入って「どこまで済んだか」が分からない状態は作らない
+    if let Err(e) = state.db.save_notes(answer.notes.clone()).await {
+        return internal_error(e, "メモを保存できない");
+    }
+
+    let answered: HashSet<&String> = answer.notes.iter().map(|(domain, _)| domain).collect();
+    let missing: Vec<&String> = domains.iter().filter(|d| !answered.contains(d)).collect();
+    if !missing.is_empty() {
+        tracing::warn!(?missing, "まとめて聞いたが答えが返らなかったドメインがある");
+    }
+
+    Json(json!({
+        "success": true,
+        "author": answer.author,
+        "results": answer.notes.iter()
+            .map(|(domain, note)| json!({ "domain": domain, "note": note }))
+            .collect::<Vec<_>>(),
+        // 答えが返らなかった分。画面が「聞けなかった件数」を出せるようにする
+        "missing": missing,
+    }))
+    .into_response()
 }
 
 /// `claude setup-token` で発行したトークンを保存する。
