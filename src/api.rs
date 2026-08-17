@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::ai::{Ai, AiChoice, AskError, MAX_BULK_DOMAINS};
+use crate::ai::{Ai, AiChoice, AskError, BRIDGE_BACKEND, BRIDGE_LABEL, MAX_DOMAINS_PER_ASK};
 use crate::db::Db;
 use crate::pihole::PiholeClient;
 
@@ -30,10 +30,10 @@ pub fn router() -> Router<AppState> {
         // **メモは確認済みと独立している。** 確認済みにしないと残せないと、
         // 「まだ判断していないが調べた内容は残したい」が表せない
         .route("/api/note", post(note_post))
-        // **1件ずつ聞く口は持たない。** 行ごとのボタンをやめたので、聞くのは
-        // 「まとめて聞く」だけ —— 呼ばれない口を残すと、画面から辿れない機能が
-        // 文書にだけ残る
-        .route("/api/ask-bulk", post(ask_bulk))
+        // **口は1つ。** 行のボタン(1件)も「まとめて聞く」(区切って何度も)も同じここを通り、
+        // どちらも結果をメモとして保存する —— 1件用の口を別に持つと、指示文と保存の仕方が
+        // 2か所に分かれる
+        .route("/api/ask", post(ask))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -46,11 +46,16 @@ struct DomainEntry {
     note: String,
 }
 
+/// 確認済み/未確認の切り替えとメモの保存。**ドメインは配列** ——
+/// 1件でもチェックした複数件でも同じ口を通す(一括用の口を別に持つと、
+/// 「メモを巻き込まない」等の決めごとが2か所に分かれる)。
 #[derive(Deserialize)]
 struct ReviewRequest {
-    domain: Option<String>,
     #[serde(default)]
-    note: String,
+    domains: Vec<String>,
+    /// **省略したらメモは触らない。** 一括で確認済みにするときに、
+    /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
+    note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -117,63 +122,60 @@ async fn domains(State(state): State<AppState>) -> Response {
     Json(entries).into_response()
 }
 
-/// 確認済みにする(メモも保存)。
+/// 確認済みにする(1件でもまとめてでも)。`note` を渡したときだけメモも保存する。
 async fn review_post(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
-    let Some(domain) = non_empty(req.domain) else {
-        return bad_request("domain required");
-    };
-    match state.db.mark_reviewed(domain, req.note).await {
-        Ok(()) => success(),
+    let domains = clean(req.domains);
+    if domains.is_empty() {
+        return bad_request("domains required");
+    }
+    let count = domains.len();
+    match state.db.set_reviewed(domains, true, req.note).await {
+        Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "確認済みにできない"),
     }
 }
 
 /// 未確認に戻す。**メモは消さない**(メモが空の行だけ消える)。
 async fn review_delete(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
-    let Some(domain) = non_empty(req.domain) else {
-        return bad_request("domain required");
-    };
-    match state.db.unmark_reviewed(domain).await {
-        Ok(()) => success(),
+    let domains = clean(req.domains);
+    if domains.is_empty() {
+        return bad_request("domains required");
+    }
+    let count = domains.len();
+    match state.db.set_reviewed(domains, false, None).await {
+        Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "未確認に戻せない"),
     }
 }
 
 /// メモだけ保存する(確認済みかどうかは変えない)。
 async fn note_post(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
-    let Some(domain) = non_empty(req.domain) else {
-        return bad_request("domain required");
+    let Some(domain) = clean(req.domains).into_iter().next() else {
+        return bad_request("domains required");
     };
-    match state.db.save_note(domain, req.note).await {
+    match state.db.save_note(domain, req.note.unwrap_or_default()).await {
         Ok(()) => success(),
         Err(e) => internal_error(e, "メモを保存できない"),
     }
 }
 
 #[derive(Deserialize)]
-struct BulkAskRequest {
+struct AskRequest {
     #[serde(default)]
     domains: Vec<String>,
 }
 
-/// まとめて聞いて、結果をそのままメモに書き戻す。
+/// 聞いて、結果をそのままメモに書き戻す(1件でも複数でも同じ)。
 ///
-/// **区切るのは画面側**(`MAX_BULK_DOMAINS` ずつ何度も呼ぶ)。1回のリクエストを
+/// **区切るのは画面側**(`MAX_DOMAINS_PER_ASK` ずつ何度も呼ぶ)。1回のリクエストを
 /// 短く保つと進捗が出せて、途中で失敗しても**そこまでのメモは残る** ——
 /// 全件を1リクエストにすると、最後まで待たされたうえに落ちたら何も残らない。
-async fn ask_bulk(State(state): State<AppState>, Json(req): Json<BulkAskRequest>) -> Response {
-    let mut seen = HashSet::new();
-    let domains: Vec<String> = req
-        .domains
-        .into_iter()
-        .filter_map(|d| non_empty(Some(d)))
-        .filter(|d| seen.insert(d.clone()))
-        .collect();
-
+async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Response {
+    let domains = clean(req.domains);
     if domains.is_empty() {
         return bad_request("domains required");
     }
-    if domains.len() > MAX_BULK_DOMAINS {
+    if domains.len() > MAX_DOMAINS_PER_ASK {
         // 黙って切り詰めない —— 切った分が「聞いたのにメモが付かない」形で表に出る
         return bad_request("1回に聞ける件数を超えています");
     }
@@ -199,12 +201,15 @@ async fn ask_bulk(State(state): State<AppState>, Json(req): Json<BulkAskRequest>
     let answered: HashSet<&String> = answer.notes.iter().map(|(domain, _)| domain).collect();
     let missing: Vec<&String> = domains.iter().filter(|d| !answered.contains(d)).collect();
     if !missing.is_empty() {
-        tracing::warn!(?missing, "まとめて聞いたが答えが返らなかったドメインがある");
+        tracing::warn!(?missing, "聞いたが答えが返らなかったドメインがある");
     }
 
     Json(json!({
         "success": true,
-        "author": answer.author,
+        // 実際に書いた相手。**複数いる**ので配列
+        "authors": answer.authors,
+        // 答えられなかった相手と理由(**1人落ちても残りは使う**)
+        "failures": answer.failures,
         "results": answer.notes.iter()
             .map(|(domain, note)| json!({ "domain": domain, "note": note }))
             .collect::<Vec<_>>(),
@@ -236,10 +241,16 @@ async fn ai_get(State(state): State<AppState>) -> Response {
 
     Json(json!({
         "chiezo_url": state.ai.chiezo_url(),
-        "bridge_label": crate::ai::BRIDGE_LABEL,
+        "bridge_label": BRIDGE_LABEL,
+        // CLIブリッジを指す予約id。**画面に埋め込まない** —— 突き合わせる値は
+        // サーバが持っているものをそのまま使う
+        "bridge_backend": BRIDGE_BACKEND,
+        // **有無だけ。** 値は返さない —— 画面が出すのは「登録済みか」だけでよい
+        "token_saved": state.ai.has_token(),
         "backends": backends,
-        "selection": state.ai.selection().await,
-        "current": state.ai.current_name().await,
+        "selections": state.ai.selections().await,
+        // 実際に聞く相手の名前(**空にならない** —— 未選択ならCLIブリッジ)
+        "current": state.ai.current_names().await,
         "error": error,
     }))
     .into_response()
@@ -247,8 +258,15 @@ async fn ai_get(State(state): State<AppState>) -> Response {
 
 #[derive(Deserialize)]
 struct SelectRequest {
-    /// 空・未指定なら CLI ブリッジ経由に戻す。
-    backend: Option<String>,
+    /// 空なら CLI ブリッジ経由に戻す。**複数選べる** —— 選んだ全員に聞いて、
+    /// 答えを1つのメモに並べる。
+    #[serde(default)]
+    selections: Vec<SelectEntry>,
+}
+
+#[derive(Deserialize)]
+struct SelectEntry {
+    backend: String,
     #[serde(default)]
     model: String,
     #[serde(default)]
@@ -258,55 +276,94 @@ struct SelectRequest {
 /// 聞く相手を保存する。**実在しない相手は受け付けない** ——
 /// 黙って保存すると、次に聞いたときまで間違いに気づけない。
 async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) -> Response {
-    let Some(backend_id) = non_empty(req.backend) else {
+    // 同じ相手を2回選んでも意味が無い(同じ答えを2回もらうだけ)
+    let mut seen = HashSet::new();
+    let entries: Vec<SelectEntry> = req
+        .selections
+        .into_iter()
+        .filter(|e| !e.backend.trim().is_empty())
+        .filter(|e| seen.insert(e.backend.trim().to_string()))
+        .collect();
+
+    if entries.is_empty() {
         // 戻すだけなので Chiezo に問い合わせない(繋がらなくても戻せる必要がある)
-        return match state.ai.select(None).await {
-            Ok(()) => Json(json!({ "success": true, "current": crate::ai::BRIDGE_LABEL }))
-                .into_response(),
+        return match state.ai.select(&[]).await {
+            Ok(()) => Json(json!({ "success": true, "current": [BRIDGE_LABEL] })).into_response(),
             Err(e) => internal_error(e, "AIの選択を保存できない"),
         };
-    };
+    }
 
-    let backends = match state.ai.backends().await {
-        Ok(backends) => backends,
-        Err(message) => return bad_gateway(&message),
-    };
-
-    let Some(backend) = backends.into_iter().find(|b| b.id == backend_id) else {
-        return bad_request("Chiezo にその相手がいません。一覧を読み直してください。");
-    };
-
-    let model = req.model.trim().to_string();
-    if model.is_empty() {
-        if backend.model_required {
-            return bad_request("この相手はモデルの指定が必要です。");
+    // **Chiezo に問い合わせるのは、Chiezo の相手が選ばれているときだけ** ——
+    // CLI ブリッジだけを選ぶ操作が、Chiezo の生死に左右されないようにする
+    let backends = if entries.iter().any(|e| e.backend != BRIDGE_BACKEND) {
+        match state.ai.backends().await {
+            Ok(backends) => backends,
+            Err(message) => return bad_gateway(&message),
         }
-    } else if !backend.models.contains(&model) {
-        return bad_request("Chiezo が知らないモデルです。一覧を読み直してください。");
-    }
-
-    let effort = req.effort.trim().to_string();
-    if !effort.is_empty() && !backend.efforts.contains(&effort) {
-        return bad_request("Chiezo が知らない考える量です。一覧を読み直してください。");
-    }
-
-    let choice = AiChoice {
-        backend: backend.id,
-        // **表記は選んだ時点のものを保存する**(表示のたびに Chiezo へ聞きに行かない)
-        label: backend.label,
-        model: (!model.is_empty()).then_some(model),
-        effort: (!effort.is_empty()).then_some(effort),
+    } else {
+        Vec::new()
     };
 
-    match state.ai.select(Some(&choice)).await {
-        Ok(()) => Json(json!({ "success": true, "current": choice.display_name() })).into_response(),
+    let mut choices = Vec::new();
+    for entry in entries {
+        if entry.backend == BRIDGE_BACKEND {
+            choices.push(AiChoice::bridge());
+            continue;
+        }
+
+        let Some(backend) = backends.iter().find(|b| b.id == entry.backend) else {
+            return bad_request("Chiezo にその相手がいません。一覧を読み直してください。");
+        };
+
+        let model = entry.model.trim().to_string();
+        if model.is_empty() {
+            if backend.model_required {
+                return bad_request("この相手はモデルの指定が必要です。");
+            }
+        } else if !backend.models.contains(&model) {
+            return bad_request("Chiezo が知らないモデルです。一覧を読み直してください。");
+        }
+
+        let effort = entry.effort.trim().to_string();
+        if !effort.is_empty() && !backend.efforts.contains(&effort) {
+            return bad_request("Chiezo が知らない考える量です。一覧を読み直してください。");
+        }
+
+        choices.push(AiChoice {
+            backend: backend.id.clone(),
+            // **表記は選んだ時点のものを保存する**(表示のたびに Chiezo へ聞きに行かない)
+            label: backend.label.clone(),
+            model: (!model.is_empty()).then_some(model),
+            effort: (!effort.is_empty()).then_some(effort),
+        });
+    }
+
+    match state.ai.select(&choices).await {
+        Ok(()) => Json(json!({
+            "success": true,
+            "current": choices.iter().map(AiChoice::display_name).collect::<Vec<_>>(),
+        }))
+        .into_response(),
         Err(e) => internal_error(e, "AIの選択を保存できない"),
     }
 }
 
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+/// 空白を落として重複を除く。**順番は保つ** ——
+/// 画面が出した並びのまま処理したいため(進捗の見え方が変わらない)。
+fn clean(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .filter(|v| seen.insert(v.clone()))
+        .collect()
 }
+
+fn reviewed_count(count: usize) -> Response {
+    Json(json!({ "success": true, "count": count })).into_response()
+}
+
 
 fn success() -> Response {
     Json(json!({ "success": true })).into_response()

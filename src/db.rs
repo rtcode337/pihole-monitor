@@ -89,21 +89,29 @@ impl Db {
         .await
     }
 
-    /// 確認済みにする(メモも保存)。
-    pub async fn mark_reviewed(&self, domain: String, note: String) -> Result<()> {
+    /// 確認済み / 未確認をまとめて切り替える(1件でも同じ経路)。
+    ///
+    /// **`note` は渡したときだけ書く。** チェックした複数件を確認済みにするときに、
+    /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
+    /// **未確認に戻してもメモは消さない** —— メモと確認済みは別の話なので、
+    /// 戻したときに調べた内容まで失われては困る(メモが空の行だけ消える)。
+    ///
+    /// **1つのトランザクションで書く** —— 途中で落ちたときに半分だけ残さないため。
+    pub async fn set_reviewed(
+        &self,
+        domains: Vec<String>,
+        reviewed: bool,
+        note: Option<String>,
+    ) -> Result<()> {
         self.with_conn(move |conn| {
-            upsert(conn, &domain, Some(&note), Some(true))?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// 未確認に戻す。**メモは消さない** —— メモと確認済みは別の話なので、
-    /// 戻したときに調べた内容まで失われては困る(メモが空の行だけ消す)。
-    pub async fn unmark_reviewed(&self, domain: String) -> Result<()> {
-        self.with_conn(move |conn| {
-            upsert(conn, &domain, None, Some(false))?;
-            cleanup(conn, &domain)?;
+            let tx = conn.unchecked_transaction()?;
+            for domain in &domains {
+                upsert(&tx, domain, note.as_deref(), Some(reviewed))?;
+                if !reviewed {
+                    cleanup(&tx, domain)?;
+                }
+            }
+            tx.commit()?;
             Ok(())
         })
         .await

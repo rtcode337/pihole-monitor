@@ -203,6 +203,27 @@ header h1 span { color: var(--c-text); }
 
 .refresh-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
+/* チェックした行の一括操作のバー */
+.select-bar {
+  padding: 0 32px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--c-muted);
+}
+
+.select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.select-count { color: var(--c-dim); }
+
 .domain-list {
   padding: 0 32px 32px;
 }
@@ -219,6 +240,13 @@ header h1 span { color: var(--c-text); }
 }
 
 .domain-item:hover { border-color: var(--c-border-strong); }
+
+/* 行のチェックボックス。一括操作の対象を選ぶ */
+.row-check {
+  flex-shrink: 0;
+  cursor: pointer;
+  margin: 0;
+}
 
 .status-dot {
   width: 6px;
@@ -252,7 +280,10 @@ header h1 span { color: var(--c-text); }
   font-size: 11px;
   color: var(--c-muted);
   margin-top: 3px;
-  word-break: break-all;
+  word-break: break-word;
+  /* **改行を保つ。** 相手が複数だと `[相手] …` が人数ぶん並ぶので、
+     1行に潰すと誰の見立てなのか読めない */
+  white-space: pre-wrap;
 }
 
 .badge {
@@ -321,30 +352,17 @@ header h1 span { color: var(--c-text); }
 /* 更新ボタンは .ai-btn が右端を取ったあとに続く */
 .ai-btn + .refresh-btn { margin-left: 0; }
 
-.modal-body {
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--c-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 40vh;
-  overflow-y: auto;
-  margin-bottom: 16px;
+/* 行の「AIに聞く」。押すと1件だけ聞いて、答えがそのままメモになる */
+.ask-ai-btn {
+  border: 1px solid var(--c-amber-border);
+  background: transparent;
+  color: var(--c-amber);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.modal-body.loading-text {
-  color: var(--c-muted);
-}
-
-.modal-body.error-text {
-  color: var(--c-red);
-}
-
-.modal-body code {
-  background: var(--c-border);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
+.ask-ai-btn:hover { background: var(--c-amber-bg); }
 
 /* ---- まとめてAIに聞く ---- */
 
@@ -374,6 +392,28 @@ header h1 span { color: var(--c-text); }
 
 .bulk-note.error-text { color: var(--c-red); }
 
+.bulk-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--c-muted);
+  margin-bottom: 12px;
+}
+
+.bulk-limit input {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  width: 70px;
+}
+
+.bulk-limit input:focus { outline: none; border-color: var(--c-blue); }
+
 /* 進んだぶんを1行ずつ積む。**画面から溢れないよう頭打ちにして中でスクロールさせる** */
 .bulk-log {
   font-size: 11px;
@@ -389,6 +429,36 @@ header h1 span { color: var(--c-text); }
 .bulk-log-item.failed { color: var(--c-red); }
 
 /* ---- 聞く相手の選択 ---- */
+
+/* CLIブリッジのトークン。**値は表示に出さない**（保存済みかどうかだけ隣に出す）ので、
+   入力は伏せ字にしてある */
+.ai-token {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  width: 150px;
+  max-width: 100%;
+}
+
+.ai-token::placeholder { color: var(--c-dim); }
+.ai-token:focus { outline: none; border-color: var(--c-blue); }
+
+.ai-hint {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--c-dim);
+  margin-bottom: 16px;
+}
+
+.ai-hint code {
+  background: var(--c-border);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
 
 .ai-note {
   font-size: 11px;
