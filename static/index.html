@@ -92,6 +92,17 @@
   </div>
 </div>
 
+<!-- 行を押すと開く詳細。**狭い画面ではここが本体** —— 行に全部を並べると
+     ドメインとメモの幅が潰れて読めなくなるので、全文と操作をここで受け持つ。
+     中身（状態・ブロック回数・メモ・操作）はJSが組む -->
+<div class="modal-overlay" id="detail-modal" style="display:none" onclick="onDetailOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">詳細</div>
+    <div class="detail-body" id="detail-body"></div>
+    <div class="modal-actions" id="detail-actions"></div>
+  </div>
+</div>
+
 <!-- まとめてAIに聞く。対象と進捗はJSが組む -->
 <div class="modal-overlay" id="bulk-modal" style="display:none" onclick="onBulkOverlayClick(event)">
   <div class="modal">

@@ -237,9 +237,22 @@ header h1 span { color: var(--c-text); }
   border-radius: 6px;
   margin-bottom: 4px;
   transition: border-color 0.15s;
+  /* 行のどこを押しても詳細が開く（ボタン・チェックボックスの上を除く。app.js）。
+     押せることが見た目に出ていないと、詳細に辿り着けない */
+  cursor: pointer;
 }
 
 .domain-item:hover { border-color: var(--c-border-strong); }
+
+/* バッジと操作ボタンのまとまり。**狭い画面ではこの塊ごと次の行へ落とす**（下の @media）——
+   個々のボタンを行に直接並べたままだと、幅が足りない画面で domain-info が0幅まで潰れ、
+   ドメインとメモが1文字ずつ縦に折り返して読めなくなる */
+.domain-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
 
 /* 行のチェックボックス。一括操作の対象を選ぶ */
 .row-check {
@@ -299,6 +312,14 @@ header h1 span { color: var(--c-text); }
   background: var(--c-blue-bg);
   color: var(--c-blue);
   border: 1px solid var(--c-blue-border);
+}
+
+/* 未確認のバッジは**詳細モーダルだけ**に出す。一覧の行には出さない
+   （行では左の赤い点が同じことを言っていて、二重になる） */
+.badge.unreviewed {
+  background: var(--c-red-bg);
+  color: var(--c-red);
+  border: 1px solid var(--c-red-border);
 }
 
 .action-btn {
@@ -680,3 +701,113 @@ header h1 span { color: var(--c-text); }
 }
 
 .confirm-btn:hover { background: var(--c-blue-bg-hover); }
+
+/* ---- 行を押して開く詳細モーダル ---- */
+/* **狭い画面ではここが本体。** 行に収まりきらないもの（長いドメイン名と、相手ごとに
+   何行にもなるメモ）を、幅いっぱいで読ませる */
+
+.detail-domain {
+  font-size: 14px;
+  color: var(--c-text-strong);
+  /* 長いドメインはどこで折ってもよい（切らずに全部見せる） */
+  word-break: break-all;
+  margin-bottom: 10px;
+}
+
+/* 詳細のコピーは**文字の隣に置く**。.copy-btn は一覧の行に合わせて position: absolute で
+   浮かせてあり、そのままだと位置の基準になる祖先が無くてモーダルの外へ飛ぶ。
+   常に出すのは、一覧のように hover では出せないため（タッチ端末に hover が無い） */
+.copy-btn.detail-copy {
+  position: static;
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 8px;
+  opacity: 1;
+}
+
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--c-muted);
+  margin-bottom: 16px;
+}
+
+.detail-label {
+  font-size: 11px;
+  color: var(--c-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.detail-note {
+  font-size: 12px;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 16px;
+  /* **改行を保つ。** 相手が複数だと `[相手] …` が人数ぶん並ぶので、
+     1行に潰すと誰の見立てなのか読めない（一覧の .domain-note と同じ理由） */
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 長いメモでモーダルが画面からはみ出さないようにする（中だけスクロールさせる） */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.detail-note.is-empty { color: var(--c-dim); }
+
+/* 操作は4つ並ぶので折り返させる —— はみ出させると画面の外に隠れて気づけない */
+#detail-actions { flex-wrap: wrap; }
+
+/* ---- 狭い画面（スマホ） ---- */
+/* 直すのは2つ。**外周の余白**（32px ずつ取られると本文の幅がほとんど残らない）と、
+   **行の組み方**（1行に詰めるのをやめる）。
+   行を flex のまま詰めていたときは、幅の足りないぶんが flex:1 の .domain-info だけから
+   削られて0幅まで潰れ、`word-break: break-all` と相まって**ドメインもメモも1文字ずつ
+   縦に折り返して読めなくなっていた**。grid にして、1段目にドメインとメモ、2段目に操作を置く */
+@media (max-width: 720px) {
+  header { padding: 16px 14px; gap: 12px; }
+  .stats { padding: 0 14px; margin: 16px 0; }
+  .stat { padding: 12px 10px; }
+  .stat-value { font-size: 22px; }
+  .toolbar { padding: 0 14px; }
+  .select-bar { padding: 0 14px; }
+  .domain-list { padding: 0 14px 24px; }
+
+  .domain-item {
+    display: grid;
+    /* 3列目に minmax(0, 1fr) を使う。**auto や 1fr だけだと中身の最小幅で押し広げられ**、
+       長いドメインが列をはみ出す（grid の既定の min-width が auto のため） */
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 10px;
+    padding: 12px;
+  }
+
+  /* 点はドメイン名の1行目の高さに合わせる（align-items: start なので上端に付く） */
+  .status-dot { margin-top: 5px; }
+  .row-check { margin-top: 2px; }
+
+  /* 操作は行いっぱいを使う2段目へ。右に寄せると、押しやすい親指側にまとまる */
+  .domain-actions {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* コピーは hover では出せない（タッチ端末に hover が無い）ので常に出す */
+  .copy-btn { opacity: 1; }
+
+  /* 押せる高さを確保する（11px の字のままだと指では狙いにくい） */
+  .action-btn { padding: 7px 12px; }
+
+  .modal { padding: 18px; max-width: calc(100vw - 24px); }
+  .modal-actions { flex-wrap: wrap; }
+}

@@ -18,6 +18,9 @@ let bulkRunning = false;
 const askingDomains = new Set();
 // 相手を選ぶモーダルを開くときに出したい一言（トークン未登録で開いたときなど）
 let aiModalMessage = null;
+// 詳細を開いているドメイン。**ドメイン名だけを持つ**（オブジェクトを持つと、
+// AIに聞いた後の allDomains の更新が詳細に映らない）
+let detailDomain = null;
 // チェックした行。**再描画をまたいで残す**（行のDOMは作り直される）
 const selectedDomains = new Set();
 
@@ -125,8 +128,11 @@ function renderDomains() {
   // 選択のバー（件数・ボタンの有効/無効）も一覧と一緒に描き直す
   renderSelection(filtered);
 
+  // **操作は .domain-actions でひとまとめにする。** 狭い画面ではこの塊ごと次の行へ落として
+  // ドメインとメモに幅を明け渡す（style.css の @media）—— 個々のボタンを行に直接並べていた
+  // ままだと、幅の足りない画面で domain-info が0幅まで潰れ、1文字ずつ縦に折り返して読めなくなる
   list.innerHTML = filtered.map(d => `
-    <div class="domain-item ${d.reviewed ? 'reviewed' : ''}">
+    <div class="domain-item ${d.reviewed ? 'reviewed' : ''}" data-domain="${escapeHtml(d.domain)}">
       <input type="checkbox" class="row-check" data-domain="${escapeHtml(d.domain)}"
              onchange="toggleSelect(this)" ${selectedDomains.has(d.domain) ? 'checked' : ''}
              aria-label="この行を選ぶ">
@@ -135,25 +141,33 @@ function renderDomains() {
         <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
       </div>
-      <!-- 未確認の行にバッジは出さない。**既読管理はしていないので「NEW」は嘘になる**
-           （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
-           「確認済」バッジの有無で足りる -->
-      ${d.reviewed ? '<span class="badge reviewed">確認済</span>' : ''}
-      <!-- 1件だけ聞く。**答えはそのままメモになる**（回答を見せるモーダルは無い）。
-           聞いている間は押せないようにする —— 状態は askingDomains に持つ（この行のDOMは
-           再描画で作り直されるため） -->
-      ${askingDomains.has(d.domain)
-        ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 聞いています…</button>`
-        : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" title="${d.note ? 'AIに聞いてメモを置き換える' : 'AIに聞いてメモにする'}">${AI_ICON} AIに聞く</button>`
-      }
-      <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
-      <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
-      ${!d.reviewed
-        ? `<button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
-        : `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
-      }
+      <div class="domain-actions">
+        <!-- 未確認の行にバッジは出さない。**既読管理はしていないので「NEW」は嘘になる**
+             （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
+             「確認済」バッジの有無で足りる -->
+        ${d.reviewed ? '<span class="badge reviewed">確認済</span>' : ''}
+        <!-- 1件だけ聞く。**答えはそのままメモになる**（回答を見せるモーダルは無い）。
+             聞いている間は押せないようにする —— 状態は askingDomains に持つ（この行のDOMは
+             再描画で作り直されるため） -->
+        ${askingDomains.has(d.domain)
+          ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 聞いています…</button>`
+          : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" title="${d.note ? 'AIに聞いてメモを置き換える' : 'AIに聞いてメモにする'}">${AI_ICON} AIに聞く</button>`
+        }
+        <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
+        <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
+        <!-- **data-note を必ず渡す。** 渡さないと this.dataset.note が undefined になり、
+             メモ欄が空のまま開いて「確認済みにする」がAIの書いたメモを空で上書きしていた -->
+        ${!d.reviewed
+          ? `<button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
+          : `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
+        }
+      </div>
     </div>
   `).join('');
+
+  // 開いている詳細も一緒に描き直す。**一覧を描き直す経路は全部ここを通る**ので、
+  // AIに聞いた・確認済みにした結果が詳細にも即座に映る（更新の呼び出しを散らさない）
+  renderDetail();
 }
 
 // ---- チェックした行の一括操作 ----
@@ -228,6 +242,8 @@ async function reviewSelected() {
 }
 
 function openModal(domain, existingNote = '') {
+  // 詳細から開いたときは詳細を閉じる（覆いを2枚重ねない）
+  if (detailDomain) closeDetailModal();
   pendingDomain = domain;
   document.getElementById('modal-domain').textContent = domain;
   document.getElementById('modal-note').value = existingNote;
@@ -245,6 +261,79 @@ function closeModal() {
 
 function onOverlayClick(event) {
   if (event.target === document.getElementById('modal')) closeModal();
+}
+
+// ---- 行を押して開く詳細 ----
+// **狭い画面ではここが本体。** 行にドメイン・メモ・操作を全部並べると、幅の足りない画面で
+// ドメインとメモが1文字ずつ縦に折り返して読めなくなる。行に出すのは要点だけにして、
+// 全文（特に相手ごとに何行にもなるメモ）と操作はここで読ませる。
+
+// 一覧は renderDomains() が innerHTML で作り直すので、**リスナーは入れ物に1回だけ付ける**
+// （相手を選ぶモーダルの #ai-list と同じ流儀）
+document.getElementById('domain-list').addEventListener('click', event => {
+  // ボタン・チェックボックスを押したときは詳細を開かない —— 行のどこを押しても開くと、
+  // 「AIに聞く」を押すたびに詳細まで開いてしまう
+  if (event.target.closest('button, input, a, label, select, textarea')) return;
+  const item = event.target.closest('.domain-item');
+  if (item) openDetailModal(item.dataset.domain);
+});
+
+function openDetailModal(domain) {
+  detailDomain = domain;
+  renderDetail();
+  document.getElementById('detail-modal').style.display = 'flex';
+}
+
+function closeDetailModal() {
+  document.getElementById('detail-modal').style.display = 'none';
+  detailDomain = null;
+}
+
+function onDetailOverlayClick(event) {
+  if (event.target === document.getElementById('detail-modal')) closeDetailModal();
+}
+
+// 開いていなければ何もしない。renderDomains() から毎回呼ばれるので、
+// 「開いているときだけ描き直す」の判定はここに1つ置く
+function renderDetail() {
+  if (!detailDomain) return;
+  const d = allDomains.find(x => x.domain === detailDomain);
+  // 一覧の読み直しで消えたドメイン（Pi-hole 側から落ちた等）は閉じる ——
+  // 中身の無い詳細を開いたままにしない
+  if (!d) { closeDetailModal(); return; }
+
+  const asking = askingDomains.has(d.domain);
+  document.getElementById('detail-body').innerHTML = `
+    <div class="detail-domain">${escapeHtml(d.domain)}<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
+    <div class="detail-meta">
+      <span class="badge ${d.reviewed ? 'reviewed' : 'unreviewed'}">${d.reviewed ? '確認済' : '未確認'}</span>
+      <span>ブロック ${d.count.toLocaleString('ja-JP')} 回</span>
+    </div>
+    <div class="detail-label">メモ</div>
+    <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
+  `;
+
+  // 操作は行と同じ顔ぶれ。**行から消さない**（広い画面では行で完結するほうが速い）ので、
+  // どちらから押しても同じ関数を通す
+  document.getElementById('detail-actions').innerHTML = `
+    <button class="action-btn cancel-btn" onclick="closeDetailModal()">閉じる</button>
+    ${asking
+      ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 聞いています…</button>`
+      : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)">${AI_ICON} AIに聞く</button>`
+    }
+    <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)">${EDIT_ICON} メモを書く</button>
+    ${d.reviewed
+      ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
+      : `<button class="action-btn confirm-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
+    }
+  `;
+}
+
+// メモの編集は既存のモーダルに渡す。**詳細は先に閉じる** ——
+// 同じ z-index の覆いを2枚重ねると、後ろの詳細を押して閉じられてしまう
+function editNoteFromDetail(domain, note) {
+  closeDetailModal();
+  openModal(domain, note);
 }
 
 
@@ -741,7 +830,7 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeAiModal(); closeBulkModal(); }
+  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
     if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();
