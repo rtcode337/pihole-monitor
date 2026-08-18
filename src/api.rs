@@ -34,6 +34,10 @@ pub fn router() -> Router<AppState> {
         // どちらも結果をメモとして保存する —— 1件用の口を別に持つと、指示文と保存の仕方が
         // 2か所に分かれる
         .route("/api/ask", post(ask))
+        // 「ブロックされていない怪しい通信」の候補。**ブロック済みの一覧とは別の口** ——
+        // あちらは Pi-hole をその場で叩く集計、こちらは貯めた過去との突き合わせで、
+        // 材料も判定も違う(watch.rs)
+        .route("/api/watch", get(watch))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -44,6 +48,25 @@ struct DomainEntry {
     count: u32,
     reviewed: bool,
     note: String,
+}
+
+/// 「ブロックされていない怪しい通信」の候補。判定は watch.rs、材料は取り込んだ蓄積。
+async fn watch(State(state): State<AppState>) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    match crate::watch::candidates(&state.db, now).await {
+        Ok(result) => Json(result).into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "怪しい通信の候補を組み立てられない");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "watch_failed" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// 確認済み/未確認の切り替えとメモの保存。**ドメインは配列** ——

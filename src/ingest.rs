@@ -49,17 +49,20 @@ pub async fn run(db: Db, pihole: PiholeClient, config: Config) {
         "DNSの取り込みを開始する"
     );
 
-    // 遡りは起動時に1回だけ。失敗しても定期取り込みは続ける
-    if let Err(e) = backfill(&db, &pihole, config.dns_backfill_days).await {
-        tracing::warn!(error = ?e, "遡り取り込みに失敗した(定期取り込みは続ける)");
-    }
-
     let mut ticker = tokio::time::interval(config.dns_ingest_interval);
     // 取りこぼした周回をまとめて取り返さない(相手を続けて叩くだけで、得るものが同じため)
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         ticker.tick().await;
+
+        // **遡りは毎周回ためす。** 起動時に1回だけだと、そのとき Pi-hole が落ちていたり
+        // 認証が通らなかったりしたぶんが**再起動するまで永久に埋まらない**
+        // (実際にセッション枠を使い切って踏んだ)。済んでいれば設定を1回読むだけで抜ける
+        if let Err(e) = backfill(&db, &pihole, config.dns_backfill_days).await {
+            tracing::warn!(error = ?e, "遡り取り込みに失敗した(次の周回でやり直す)");
+        }
+
         match ingest_once(&db, &pihole, &config).await {
             Ok(0) => tracing::debug!("新しいクエリは無かった"),
             Ok(n) => tracing::info!(inserted = n, "クエリを取り込んだ"),

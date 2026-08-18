@@ -4,9 +4,11 @@
 //! それを使って `GET /api/queries` を1回叩く(1リクエストあたり計2コール)。
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::config::Config;
 
@@ -16,6 +18,13 @@ pub struct PiholeClient {
     base_url: String,
     password: String,
     query_limit: i64,
+    /// 取ったセッション(sid)を使い回す。
+    ///
+    /// **リクエストのたびに `POST /api/auth` してはいけない。** Pi-hole は同時セッション数に
+    /// 上限があり(既定16。`webserver.api.max_sessions`)、超えると認証そのものが
+    /// `api_seats_exceeded` で断られて**取り込みが丸ごと止まる**。遡り取り込みは1回で
+    /// 30日ぶん叩くので、作り直していると即座に上限に当たる(実際に踏んだ)。
+    session: Arc<Mutex<Option<String>>>,
 }
 
 /// `POST /api/auth` のレスポンス。
@@ -131,10 +140,65 @@ impl PiholeClient {
             base_url: config.pihole_base_url.clone(),
             password: config.pihole_password.clone(),
             query_limit: config.pihole_query_limit,
+            session: Arc::new(Mutex::new(None)),
         })
     }
 
-    async fn session_id(&self) -> Result<String> {
+    /// 手元のセッション。無ければ取りに行って覚える。
+    async fn sid(&self) -> Result<String> {
+        if let Some(sid) = self.cached_sid() {
+            return Ok(sid);
+        }
+        let sid = self.authenticate().await?;
+        self.store_sid(Some(sid.clone()));
+        Ok(sid)
+    }
+
+    fn cached_sid(&self) -> Option<String> {
+        self.session
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn store_sid(&self, sid: Option<String>) {
+        *self.session.lock().unwrap_or_else(|p| p.into_inner()) = sid;
+    }
+
+    /// GET を1本投げる。**401 が返ったらセッションを取り直して1回だけやり直す** ——
+    /// Pi-hole 側の期限切れ(既定30分)や再起動で、覚えている sid は黙って無効になる。
+    async fn get_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+        what: &'static str,
+    ) -> Result<T> {
+        for attempt in 0..2 {
+            let sid = self.sid().await?;
+            let resp = self
+                .http
+                .get(format!("{}{}", self.base_url, path))
+                .query(params)
+                .header("sid", sid)
+                .send()
+                .await
+                .with_context(|| format!("Pi-holeに到達できない({what})"))?;
+
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                self.store_sid(None);
+                continue;
+            }
+            return resp
+                .error_for_status()
+                .with_context(|| format!("Pi-holeがエラーステータスを返した({what})"))?
+                .json::<T>()
+                .await
+                .with_context(|| format!("Pi-holeの応答を解釈できない({what})"));
+        }
+        anyhow::bail!("Pi-holeの認証をやり直しても通らなかった({what})")
+    }
+
+    async fn authenticate(&self) -> Result<String> {
         let resp: AuthResponse = self
             .http
             .post(format!("{}/api/auth", self.base_url))
@@ -148,29 +212,21 @@ impl PiholeClient {
 
         resp.session
             .and_then(|s| s.sid)
-            .context("Pi-holeがセッションIDを返さなかった(パスワードが違う可能性がある)")
+            .context("Pi-holeがセッションIDを返さなかった(パスワードが違うか、同時セッション数の上限に達している)")
     }
 
     /// ブロック済みクエリを取得し、ドメインごとの件数にまとめて返す。
     pub async fn blocked_domains(&self) -> Result<HashMap<String, u32>> {
-        let sid = self.session_id().await?;
-
-        let resp = self
-            .http
-            .get(format!("{}/api/queries", self.base_url))
-            .query(&[
-                ("upstream", "blocklist".to_string()),
-                ("length", self.query_limit.to_string()),
-            ])
-            .header("sid", sid)
-            .send()
-            .await
-            .context("Pi-holeのクエリ一覧を取得できない")?
-            .error_for_status()
-            .context("Pi-holeがエラーステータスを返した")?
-            .json::<QueriesResponse>()
-            .await
-            .context("Pi-holeのクエリ一覧を解釈できない")?;
+        let resp: QueriesResponse = self
+            .get_json(
+                "/api/queries",
+                &[
+                    ("upstream", "blocklist".to_string()),
+                    ("length", self.query_limit.to_string()),
+                ],
+                "ブロック済みクエリ",
+            )
+            .await?;
 
         let mut counts: HashMap<String, u32> = HashMap::new();
         for query in resp.queries {
@@ -186,28 +242,21 @@ impl PiholeClient {
     /// **窓は少し重ねて渡すこと**(呼び出し側が `since` を巻き戻す)。Pi-hole 側の記録は
     /// 時刻順に確定するとは限らず、境界ぴったりで切ると取りこぼす。重複は `id` で弾く。
     pub async fn queries_since(&self, since: f64) -> Result<Vec<QueryRecord>> {
-        let sid = self.session_id().await?;
         let mut out: Vec<QueryRecord> = Vec::new();
 
         for page in 0..MAX_PAGES_PER_RUN {
             let start = page as i64 * MAX_ROWS_PER_REQUEST;
-            let resp = self
-                .http
-                .get(format!("{}/api/queries", self.base_url))
-                .query(&[
-                    ("from", format!("{:.0}", since.max(0.0))),
-                    ("length", MAX_ROWS_PER_REQUEST.to_string()),
-                    ("start", start.to_string()),
-                ])
-                .header("sid", sid.as_str())
-                .send()
-                .await
-                .context("Pi-holeのクエリ一覧を取得できない")?
-                .error_for_status()
-                .context("Pi-holeがエラーステータスを返した")?
-                .json::<QueriesResponse>()
-                .await
-                .context("Pi-holeのクエリ一覧を解釈できない")?;
+            let resp: QueriesResponse = self
+                .get_json(
+                    "/api/queries",
+                    &[
+                        ("from", format!("{:.0}", since.max(0.0))),
+                        ("length", MAX_ROWS_PER_REQUEST.to_string()),
+                        ("start", start.to_string()),
+                    ],
+                    "クエリ一覧",
+                )
+                .await?;
 
             let received = resp.queries.len() as i64;
             out.extend(resp.queries.into_iter().filter_map(record_of));
@@ -227,37 +276,40 @@ impl PiholeClient {
     }
 
     /// 期間内のドメインごとの件数。遡り取り込み(`DomainCount` のコメント参照)で使う。
+    ///
+    /// **許可されたぶんとブロックされたぶんを両方引いて合わせる。** 既定の応答は
+    /// 許可されたドメインだけで、`blocked=true` を付けたときだけブロック済みが返る ——
+    /// 片方だけだと、**ブロックされているドメインが「遡りでは見なかった」ことになり、
+    /// 生の取り込みが最初に拾った瞬間に「初出」として挙がってくる**(実際に
+    /// mask.icloud.com と api3.siftscience.com がそうなった)。
     pub async fn domain_counts(&self, from: i64, until: i64) -> Result<Vec<DomainCount>> {
-        let sid = self.session_id().await?;
-        let resp = self
-            .http
-            .get(format!("{}/api/stats/database/top_domains", self.base_url))
-            .query(&[
-                ("from", from.to_string()),
-                ("until", until.to_string()),
-                // 件数で切らない。**上位N件にすると、1回しか出ていないドメインが落ちる** ——
-                // 初出の判定はまさにそこを見るので、切ると意味が無くなる
-                ("count", "1000000".to_string()),
-            ])
-            .header("sid", sid.as_str())
-            .send()
-            .await
-            .context("Pi-holeのドメイン集計を取得できない")?
-            .error_for_status()
-            .context("Pi-holeがエラーステータスを返した(ドメイン集計)")?
-            .json::<TopDomainsResponse>()
-            .await
-            .context("Pi-holeのドメイン集計を解釈できない")?;
-
-        Ok(resp
-            .domains
-            .into_iter()
-            .filter(|d| !d.domain.is_empty())
-            .map(|d| DomainCount {
-                domain: d.domain,
-                count: d.count,
-            })
-            .collect())
+        let mut out: Vec<DomainCount> = Vec::new();
+        for blocked in ["false", "true"] {
+            let resp: TopDomainsResponse = self
+                .get_json(
+                    "/api/stats/database/top_domains",
+                    &[
+                        ("from", from.to_string()),
+                        ("until", until.to_string()),
+                        // 件数で切らない。**上位N件にすると、1回しか出ていないドメインが落ちる**
+                        // —— 初出の判定はまさにそこを見るので、切ると意味が無くなる
+                        ("count", "1000000".to_string()),
+                        ("blocked", blocked.to_string()),
+                    ],
+                    "ドメイン集計",
+                )
+                .await?;
+            out.extend(
+                resp.domains
+                    .into_iter()
+                    .filter(|d| !d.domain.is_empty())
+                    .map(|d| DomainCount {
+                        domain: d.domain,
+                        count: d.count,
+                    }),
+            );
+        }
+        Ok(out)
     }
 }
 

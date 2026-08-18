@@ -9,6 +9,7 @@ mod db;
 mod ingest;
 mod pages;
 mod pihole;
+mod watch;
 
 use std::net::{Ipv4Addr, SocketAddr};
 

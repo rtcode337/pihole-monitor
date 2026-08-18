@@ -44,9 +44,20 @@
   </div>
   <div class="stat">
     <div class="stat-value" id="stat-total">-</div>
-    <div class="stat-label">ブロック総数</div>
+    <div class="stat-label" id="stat-total-label">ブロック総数</div>
   </div>
 </div>
+
+<!-- 上段のタブ。**2つの画面は材料も判定も違う** ——
+     ブロック済みはPi-holeをその場で叩いた集計、監視は貯めた過去との突き合わせ -->
+<div class="modebar">
+  <button class="mode-btn active" id="mode-blocked" onclick="setMode('blocked', event)">ブロック済み</button>
+  <button class="mode-btn" id="mode-watch" onclick="setMode('watch', event)">未ブロックの監視</button>
+</div>
+
+<!-- 監視モードのときだけ出す前置き。**「どこまで見えているか」を必ず添える** ——
+     貯まっていない時期に「0件」と出ると、平穏なのか材料が無いのか区別できない -->
+<div class="watch-context" id="watch-context" hidden></div>
 
 <div class="toolbar">
   <button class="filter-btn active" onclick="setFilter('new', event)">未確認のみ</button>

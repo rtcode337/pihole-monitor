@@ -7,6 +7,12 @@ const MOON_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" s
 
 let allDomains = [];
 let currentFilter = 'new';
+// 'blocked' = Pi-holeが止めたもの / 'watch' = 素通りしているものの中の怪しい候補。
+// **同じ一覧の変数に入れる**ので、フィルター・選択・まとめて聞く・詳細モーダルは
+// どちらのモードでもそのまま動く（行が持つ項目が増えるだけ）
+let currentMode = 'blocked';
+// 監視モードの前置き（どこまで見えているか）。/api/watch の応答から作る
+let watchMeta = null;
 let pendingDomain = null;
 let answerPendingDomain = null;
 // /api/ai の応答。相手の一覧・選択・繋がらない理由が入る（取れなければ null）
@@ -68,20 +74,60 @@ function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function setMode(mode, event) {
+  if (currentMode === mode) return;
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  if (event) event.target.classList.add('active');
+  // **モードを跨いだ選択は残さない。** 別の一覧の行を選んだまま「選択を確認済みにする」を
+  // 押すと、見えていないものを確認済みにすることになる
+  selectedDomains.clear();
+  loadDomains();
+}
+
 async function loadDomains() {
   document.getElementById('domain-list').innerHTML = '<div class="loading">読み込み中...</div>';
   try {
-    const resp = await fetch('/api/domains');
+    const resp = await fetch(currentMode === 'watch' ? '/api/watch' : '/api/domains');
     if (!resp.ok) {
       showFetchError();
       return;
     }
-    allDomains = await resp.json();
+    const body = await resp.json();
+    if (currentMode === 'watch') {
+      watchMeta = body;
+      allDomains = body.items || [];
+    } else {
+      watchMeta = null;
+      allDomains = body;
+    }
+    renderWatchContext();
     updateStats();
     renderDomains();
   } catch(e) {
     showFetchError();
   }
+}
+
+// 監視モードの前置き。**「どこまで見えているか」を必ず出す** ——
+// 材料が貯まっていない時期の「0件」を、平穏だと読み違えないため
+function renderWatchContext() {
+  const box = document.getElementById('watch-context');
+  if (currentMode !== 'watch' || !watchMeta) { box.hidden = true; return; }
+  const m = watchMeta;
+  const parts = [];
+  if (!m.ready) {
+    parts.push('<strong class="watch-warn">⚠️ 過去の取り込みがまだ終わっていません。'
+      + 'いまは「はじめて見た」が当てになりません</strong>（過去を知らないので、すべてが初出に見えます）。');
+  }
+  parts.push(`直近 ${m.window_hours} 時間を、過去 ${m.backfill_days} 日ぶんの記録（${(m.total_domains||0).toLocaleString()} ドメイン）と`
+    + `突き合わせています。件数と種別は手元に貯まっている ${Math.floor(m.data_hours)} 時間ぶんが対象です。`);
+  if (m.qtypes && m.qtypes.length) {
+    const shown = m.qtypes.map(([t, n]) => `${t} ${n.toLocaleString()}`).join(' / ');
+    parts.push(`<span class="watch-qtypes">この間に出たクエリ種別: ${escapeHtml(shown)}</span>`);
+  }
+  box.innerHTML = parts.join('<br>');
+  box.hidden = false;
 }
 
 function showFetchError() {
@@ -98,6 +144,10 @@ function updateStats() {
   document.getElementById('stat-new').textContent = newCount;
   document.getElementById('stat-reviewed').textContent = reviewedCount;
   document.getElementById('stat-total').textContent = allDomains.length;
+  // **3つ目の数字は意味が変わる。** ブロック済みでは「止めた総数」だが、
+  // 監視では「挙がった候補の数」——同じラベルのままだと嘘になる
+  document.getElementById('stat-total-label').textContent =
+    currentMode === 'watch' ? '怪しい候補' : 'ブロック総数';
 }
 
 function setFilter(filter, event) {
@@ -115,13 +165,29 @@ function filteredDomains() {
   return allDomains;
 }
 
+// 候補が挙がった理由。**必ず出す** —— 「なぜこれが並んでいるのか」が読めない一覧は、
+// 誤検知か本物かを人が判断できず、結局まるごと無視されることになる。
+// ブロック済みの行には reasons が無いので、そのときは何も出さない
+function reasonsHtml(d) {
+  if (!d.reasons || !d.reasons.length) return '';
+  const items = d.reasons
+    .map(r => `<span class="reason reason-${escapeHtml(r.kind)}">${escapeHtml(r.detail)}</span>`)
+    .join('');
+  // どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）
+  const clients = (d.clients && d.clients.length)
+    ? `<span class="reason-clients">${escapeHtml(d.clients.join(', '))}</span>` : '';
+  return `<div class="reasons">${items}${clients}</div>`;
+}
+
 function renderDomains() {
   const list = document.getElementById('domain-list');
   const filtered = filteredDomains();
 
   if (filtered.length === 0) {
     renderSelection(filtered);
-    list.innerHTML = '<div class="empty"><div class="empty-icon">&#10003;</div>未確認のドメインはありません</div>';
+    list.innerHTML = currentMode === 'watch'
+      ? '<div class="empty"><div class="empty-icon">&#10003;</div>いまの窓では、挙がった候補はありません</div>'
+      : '<div class="empty"><div class="empty-icon">&#10003;</div>未確認のドメインはありません</div>';
     return;
   }
 
@@ -139,6 +205,7 @@ function renderDomains() {
       <div class="status-dot ${d.reviewed ? 'reviewed' : 'new'}"></div>
       <div class="domain-info">
         <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
+        ${reasonsHtml(d)}
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
       </div>
       <div class="domain-actions">
@@ -307,8 +374,9 @@ function renderDetail() {
     <div class="detail-domain">${escapeHtml(d.domain)}<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
     <div class="detail-meta">
       <span class="badge ${d.reviewed ? 'reviewed' : 'unreviewed'}">${d.reviewed ? '確認済' : '未確認'}</span>
-      <span>ブロック ${d.count.toLocaleString('ja-JP')} 回</span>
+      <span>${d.reasons ? '直近' : 'ブロック'} ${d.count.toLocaleString('ja-JP')} 回</span>
     </div>
+    ${reasonsHtml(d)}
     <div class="detail-label">メモ</div>
     <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
   `;

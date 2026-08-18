@@ -158,6 +158,98 @@ header h1 span { color: var(--c-text); }
   text-transform: uppercase;
 }
 
+/* 上段のタブ。ブロック済み / 未ブロックの監視 を切り替える。
+   **フィルター（未確認・確認済み）より上の段に置く** —— 一覧そのものが入れ替わる操作で、
+   同じ列に並べると「絞り込みの一種」に見える */
+.modebar {
+  padding: 0 32px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.mode-btn {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--c-muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s;
+}
+
+.mode-btn:hover { color: var(--c-text); }
+
+/* 選んでいる側だけ面をつなげて、下線を切る（タブに見せる） */
+.mode-btn.active {
+  color: var(--c-text-strong);
+  border-color: var(--c-border);
+  border-bottom: 1px solid var(--c-bg);
+  background: var(--c-bg);
+}
+
+/* 監視モードの前置き（どこまで見えているか）。**0件の意味を読み違えさせない** */
+.watch-context {
+  padding: 10px 14px;
+  margin: 0 32px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--c-muted);
+}
+
+.watch-warn { color: var(--c-amber); }
+.watch-qtypes { color: var(--c-dim); }
+
+/* 候補が挙がった理由。**手ごとに色を変える** —— 同じ見た目だと、
+   「新しく見ただけ」と「トンネリングの疑い」が並んで同じ重さに見える */
+.reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+.reason {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--c-border-strong);
+  color: var(--c-muted);
+}
+
+.reason-first_seen {
+  border-color: var(--c-blue-border);
+  color: var(--c-blue);
+  background: var(--c-blue-bg);
+}
+
+.reason-nxdomain {
+  border-color: var(--c-amber-border);
+  color: var(--c-amber);
+  background: var(--c-amber-bg);
+}
+
+/* トンネリングの疑い。**一番強い色にする** */
+.reason-rare_qtype {
+  border-color: var(--c-red-border);
+  color: var(--c-red);
+  background: var(--c-red-bg);
+}
+
+.reason-clients {
+  font-size: 10px;
+  color: var(--c-dim);
+}
+
 .toolbar {
   padding: 0 32px;
   margin-bottom: 16px;
@@ -777,6 +869,8 @@ header h1 span { color: var(--c-text); }
   .stat { padding: 12px 10px; }
   .stat-value { font-size: 22px; }
   .toolbar { padding: 0 14px; }
+  .modebar { padding: 0 14px; }
+  .watch-context { margin: 0 14px 12px; }
   .select-bar { padding: 0 14px; }
   .domain-list { padding: 0 14px 24px; }
 

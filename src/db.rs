@@ -382,6 +382,128 @@ impl Db {
         .await
     }
 
+    // ---- 「怪しい通信」の候補を数える(watch.rs から呼ぶ) ----
+
+    /// `since` 以降にはじめて見たドメイン(初出)。**新しい順**。
+    ///
+    /// 判定の根拠は `dns_domains.first_seen` だけで、生のクエリの保持期間には依らない
+    /// (遡り取り込みが埋めた日付がそのまま効く)。
+    pub async fn first_seen_since(&self, since: i64) -> Result<Vec<(String, i64, i64)>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT domain, first_seen, total FROM dns_domains
+                  WHERE first_seen >= ?1 ORDER BY first_seen DESC",
+            )?;
+            let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// `since` 以降に NXDOMAIN が返ったドメインと件数(多い順)。
+    pub async fn nxdomain_since(&self, since: f64, min_count: i64) -> Result<Vec<(String, i64)>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT domain, COUNT(*) AS n FROM dns_queries
+                  WHERE ts >= ?1 AND reply = 'NXDOMAIN'
+                  GROUP BY domain HAVING n >= ?2 ORDER BY n DESC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![since, min_count], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// `since` 以降に出たクエリ種別ごとの件数(全体)。**平常の形を知るために使う** ——
+    /// 何が珍しいかは、その環境で実際に出ている割合からしか決められない。
+    pub async fn qtype_counts_since(&self, since: f64) -> Result<Vec<(String, i64)>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT qtype, COUNT(*) AS n FROM dns_queries
+                  WHERE ts >= ?1 GROUP BY qtype ORDER BY n DESC",
+            )?;
+            let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// `since` 以降に、指定した種別を引いたドメインと件数。
+    pub async fn domains_by_qtype_since(
+        &self,
+        since: f64,
+        qtypes: Vec<String>,
+    ) -> Result<Vec<(String, String, i64)>> {
+        if qtypes.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let holes = vec!["?"; qtypes.len()].join(",");
+            let sql = format!(
+                "SELECT domain, qtype, COUNT(*) AS n FROM dns_queries
+                  WHERE ts >= ?1 AND qtype IN ({holes})
+                  GROUP BY domain, qtype ORDER BY n DESC"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(since)];
+            for t in &qtypes {
+                params.push(Box::new(t.clone()));
+            }
+            let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(refs.as_slice(), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// ドメインごとの、`since` 以降の件数と引いたクライアント。
+    /// **どの端末が引いたかは判断材料そのもの**(PCが引くのと家電が引くのでは意味が違う)。
+    pub async fn domain_activity_since(
+        &self,
+        since: f64,
+        domains: Vec<String>,
+    ) -> Result<HashMap<String, (i64, Vec<String>)>> {
+        if domains.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.with_conn(move |conn| {
+            let holes = vec!["?"; domains.len()].join(",");
+            let sql = format!(
+                "SELECT domain, client, COUNT(*) FROM dns_queries
+                  WHERE ts >= ?1 AND domain IN ({holes})
+                  GROUP BY domain, client"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(since)];
+            for d in &domains {
+                params.push(Box::new(d.clone()));
+            }
+            let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(refs.as_slice(), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?;
+            let mut out: HashMap<String, (i64, Vec<String>)> = HashMap::new();
+            for row in rows {
+                let (domain, client, n) = row?;
+                let e = out.entry(domain).or_insert((0, Vec::new()));
+                e.0 += n;
+                if !e.1.contains(&client) {
+                    e.1.push(client);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     /// 取り込みの状況(画面と起動ログに出す)。
     pub async fn ingest_stats(&self) -> Result<IngestStats> {
         self.with_conn(|conn| {
