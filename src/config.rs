@@ -50,6 +50,19 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// CLI を同梱していた頃のトークンの置き場(移行のためだけに残している)。
     pub claude_token_path: PathBuf,
+
+    // ---- DNSの取り込み(ingest.rs) ----
+    /// 取り込みを回すか。**既定は有効** —— これが無いと「怪しい通信」の判定材料が貯まらない。
+    pub dns_ingest_enabled: bool,
+    /// 取り込みの周期。短くしても Pi-hole を叩く回数が増えるだけで、得られる情報は変わらない。
+    pub dns_ingest_interval: Duration,
+    /// 生のクエリを何日ぶん残すか。**長くすると効くのは周期の検出だけ**で、
+    /// 初出の判定は `dns_domains` が受け持つので保持期間に関係なく効く。
+    pub dns_retention_days: i64,
+    /// 起動時に何日ぶん遡ってドメインの初出を埋めるか。
+    /// **0にすると「初日はすべてが初出」になる**ので、既定で30日ぶん遡る
+    /// (集計の口を使うので1日1リクエスト・約60KBで済む)。
+    pub dns_backfill_days: i64,
 }
 
 impl Config {
@@ -82,6 +95,10 @@ impl Config {
             chiezo_timeout: Duration::from_secs(env_parse("CHIEZO_TIMEOUT", 180)),
             state_dir,
             claude_token_path: data_dir.join("claude_token"),
+            dns_ingest_enabled: env_bool("DNS_INGEST_ENABLED", true),
+            dns_ingest_interval: Duration::from_secs(env_parse("DNS_INGEST_INTERVAL", 300)),
+            dns_retention_days: env_parse("DNS_RETENTION_DAYS", 7),
+            dns_backfill_days: env_parse("DNS_BACKFILL_DAYS", 30),
         }
     }
 }
@@ -98,6 +115,22 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
             Ok(value) => value,
             Err(_) => {
                 tracing::warn!(key, value = %raw, "環境変数を数値として解釈できないためデフォルトを使う");
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+/// 真偽値の環境変数。`false`/`0`/`no` を偽、それ以外(空を含む)を既定に倒す。
+fn env_bool(key: &str, default: bool) -> bool {
+    match env::var(key) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "false" | "0" | "no" | "off" => false,
+            "true" | "1" | "yes" | "on" => true,
+            "" => default,
+            other => {
+                tracing::warn!(key, value = other, "真偽値として解釈できないためデフォルトを使う");
                 default
             }
         },

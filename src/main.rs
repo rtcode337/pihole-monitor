@@ -6,6 +6,7 @@ mod chiezo;
 mod claude;
 mod config;
 mod db;
+mod ingest;
 mod pages;
 mod pihole;
 
@@ -49,6 +50,14 @@ async fn main() -> Result<()> {
         db,
         pihole: PiholeClient::new(&config)?,
     };
+
+    // DNSの取り込みは**別タスクで回し続ける**(画面の応答を待たせない)。
+    // 失敗しても中で握って続けるので、ここでは投げっぱなしでよい
+    tokio::spawn(ingest::run(
+        state.db.clone(),
+        state.pihole.clone(),
+        config.clone(),
+    ));
 
     let app = Router::new()
         .merge(pages::router())

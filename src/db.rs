@@ -23,9 +23,34 @@ pub struct DomainRecord {
     pub reviewed: bool,
 }
 
+/// 取り込みの状況(件数と、生のクエリの一番古い時刻)。
+///
+/// **いまは遡り取り込みの完了ログにしか出していない。** 画面に「どれだけ貯まっているか」を
+/// 出すのは次の段(初出ドメインの一覧)の仕事なので、そこで使う。
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct IngestStats {
+    pub queries: i64,
+    pub domains: i64,
+    pub oldest_ts: Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
+}
+
+/// unix秒 → 日本時間の日付(YYYY-MM-DD)。
+///
+/// **日付の境界は日本時間で数える。** UTC のまま日付に直すと、日本の朝9時までが
+/// 前日に入り、「今日の件数」が実際とずれる。JST は夏時間を持たないので固定の +9h でよい。
+fn jst_day(ts: f64) -> String {
+    const JST_OFFSET_SECS: i64 = 9 * 3600;
+    let days = (ts as i64 + JST_OFFSET_SECS).div_euclid(86_400);
+    // 1970-01-01 からの日数を暦に直す(chrono の DateTime を経由せずに済ませる)
+    chrono::NaiveDate::from_num_days_from_ce_opt(days as i32 + 719_163)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "1970-01-01".to_string())
 }
 
 impl Db {
@@ -62,6 +87,55 @@ impl Db {
              )",
         )
         .context("settingsテーブルを作成できない")?;
+
+        // ---- 「ブロックされていない通信」を見るための蓄積(第2の柱) ----
+        //
+        // **ブロック済みの一覧(domain_notes)と役割が違う。** あちらは Pi-hole を叩いた
+        // その場の集計だが、こちらは「いつもと違うか」を言うための時系列で、
+        // 比較対象が無いと何も判定できない。だから貯める。
+        conn.execute_batch(
+            // 生のクエリ。**保持期間つきの窓**(DNS_RETENTION_DAYS)。周期の検出に
+            // 1件ごとの時刻が要るので、集計ではなく生で持つ。
+            // 主キーは Pi-hole の id ——取りこぼさないよう窓を重ねて取るので、
+            // 重複を弾く手立てが要る
+            "CREATE TABLE IF NOT EXISTS dns_queries (
+                 id       INTEGER PRIMARY KEY,
+                 ts       REAL NOT NULL,
+                 domain   TEXT NOT NULL,
+                 client   TEXT NOT NULL,
+                 qtype    TEXT NOT NULL,
+                 status   TEXT NOT NULL,
+                 reply    TEXT,
+                 upstream TEXT,
+                 cname    TEXT
+             );
+             CREATE INDEX IF NOT EXISTS dns_queries_ts ON dns_queries(ts);
+             CREATE INDEX IF NOT EXISTS dns_queries_domain ON dns_queries(domain, ts);
+
+             -- ドメインの一生。**保持期間を過ぎても消さない** ——
+             -- 初出(はじめて見た日)の判定はこの列だけが根拠で、
+             -- 生のクエリと一緒に消すと『毎日すべてが初出』になる
+             CREATE TABLE IF NOT EXISTS dns_domains (
+                 domain     TEXT PRIMARY KEY,
+                 first_seen INTEGER NOT NULL,
+                 last_seen  INTEGER NOT NULL,
+                 total      INTEGER NOT NULL DEFAULT 0,
+                 -- 1 なら遡り取り込みで作った行(first_seen が日単位の粒度しかない)
+                 backfilled INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX IF NOT EXISTS dns_domains_first ON dns_domains(first_seen);
+
+             -- クライアントごとの日次の件数。**生のクエリが消えても残す** ——
+             -- 「この端末が急に見えなくなった(VPN・DoHに切り替わった)」を言うには
+             -- 保持期間より長い並びが要る
+             CREATE TABLE IF NOT EXISTS dns_client_daily (
+                 day    TEXT NOT NULL,
+                 client TEXT NOT NULL,
+                 count  INTEGER NOT NULL,
+                 PRIMARY KEY (day, client)
+             )",
+        )
+        .context("DNS取り込み用のテーブルを作成できない")?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -174,6 +248,158 @@ impl Db {
     }
 
     /// ブロッキングなDB操作をブロッキング用スレッドプールで実行する。
+    // ---- DNS取り込み(ingest.rs から呼ぶ) ----
+
+    /// 取り込みの進み具合。`settings` に文字列で持つ(専用のテーブルを増やさない)。
+    pub async fn ingest_cursor(&self) -> Result<Option<f64>> {
+        let raw = self.setting("dns_ingest_cursor").await?;
+        Ok(raw.and_then(|v| v.parse::<f64>().ok()))
+    }
+
+    pub async fn set_ingest_cursor(&self, ts: f64) -> Result<()> {
+        self.set_setting("dns_ingest_cursor", Some(format!("{ts:.3}")))
+            .await
+    }
+
+    /// 遡り取り込みを終えた日数(設定を伸ばしたらその差分だけやり直す)。
+    pub async fn backfilled_days(&self) -> Result<i64> {
+        let raw = self.setting("dns_backfilled_days").await?;
+        Ok(raw.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0))
+    }
+
+    pub async fn set_backfilled_days(&self, days: i64) -> Result<()> {
+        self.set_setting("dns_backfilled_days", Some(days.to_string()))
+            .await
+    }
+
+    /// いま持っている一番大きい id。**Pi-hole 側の id がこれより小さくなったら、
+    /// 向こうの DB が作り直されている**(id が振り直される)ので、こちらも捨てて取り直す。
+    pub async fn max_query_id(&self) -> Result<i64> {
+        self.with_conn(|conn| {
+            Ok(conn.query_row("SELECT COALESCE(MAX(id), 0) FROM dns_queries", [], |r| {
+                r.get(0)
+            })?)
+        })
+        .await
+    }
+
+    /// 取り込んだクエリを保存し、ドメインとクライアントの集計も同じトランザクションで更新する。
+    /// 戻り値は実際に増えた件数(重複は `id` で弾かれる)。
+    ///
+    /// **1つのトランザクションで書く。** 途中で落ちて「生のクエリだけ入って集計が古い」
+    /// 状態を残さないため。
+    pub async fn insert_queries(&self, records: Vec<crate::pihole::QueryRecord>) -> Result<usize> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut inserted = 0usize;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO dns_queries
+                       (id, ts, domain, client, qtype, status, reply, upstream, cname)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )?;
+                let mut dom = tx.prepare(
+                    // first_seen は小さいほうを残す(遡り取り込みが先に入れた日付を、
+                    // 後から来た新しい時刻で上書きしない)
+                    "INSERT INTO dns_domains (domain, first_seen, last_seen, total, backfilled)
+                     VALUES (?1, ?2, ?2, ?3, 0)
+                     ON CONFLICT(domain) DO UPDATE SET
+                       first_seen = MIN(first_seen, excluded.first_seen),
+                       last_seen  = MAX(last_seen,  excluded.last_seen),
+                       total      = total + excluded.total",
+                )?;
+                let mut cli = tx.prepare(
+                    "INSERT INTO dns_client_daily (day, client, count) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(day, client) DO UPDATE SET count = count + excluded.count",
+                )?;
+
+                for r in &records {
+                    let n = stmt.execute(rusqlite::params![
+                        r.id, r.ts, r.domain, r.client, r.qtype, r.status,
+                        r.reply, r.upstream, r.cname
+                    ])?;
+                    // **重複した行では集計を進めない。** 窓を重ねて取るので、
+                    // ここで数えると同じクエリを何度も足してしまう
+                    if n == 0 {
+                        continue;
+                    }
+                    inserted += 1;
+                    let secs = r.ts as i64;
+                    dom.execute(rusqlite::params![r.domain, secs, 1i64])?;
+                    cli.execute(rusqlite::params![jst_day(r.ts), r.client, 1i64])?;
+                }
+            }
+            tx.commit()?;
+            Ok(inserted)
+        })
+        .await
+    }
+
+    /// 遡り取り込み: その日に出たドメインを `dns_domains` に反映する。
+    /// **生のクエリは入れない**(集計しか取っていないので時刻が無い)。
+    pub async fn merge_domain_counts(
+        &self,
+        counts: Vec<crate::pihole::DomainCount>,
+        day_start: i64,
+    ) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO dns_domains (domain, first_seen, last_seen, total, backfilled)
+                     VALUES (?1, ?2, ?2, ?3, 1)
+                     ON CONFLICT(domain) DO UPDATE SET
+                       first_seen = MIN(first_seen, excluded.first_seen),
+                       last_seen  = MAX(last_seen,  excluded.last_seen),
+                       total      = total + excluded.total",
+                )?;
+                for c in &counts {
+                    stmt.execute(rusqlite::params![c.domain, day_start, c.count])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 保持期間を過ぎた生のクエリを消す。**`dns_domains` と `dns_client_daily` は消さない**
+    /// —— 初出とカバレッジの判定はそちらが根拠なので、一緒に消すと積み上げた意味が無くなる。
+    pub async fn prune_queries(&self, before_ts: f64) -> Result<usize> {
+        self.with_conn(move |conn| {
+            Ok(conn.execute("DELETE FROM dns_queries WHERE ts < ?1", [before_ts])? )
+        })
+        .await
+    }
+
+    /// Pi-hole の DB が作り直されたときに、こちらの生のクエリを捨てる
+    /// (id が振り直されるので、そのままだと新しい行が重複として弾かれ続ける)。
+    pub async fn reset_queries(&self) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute_batch("DELETE FROM dns_queries")?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 取り込みの状況(画面と起動ログに出す)。
+    pub async fn ingest_stats(&self) -> Result<IngestStats> {
+        self.with_conn(|conn| {
+            let queries: i64 =
+                conn.query_row("SELECT COUNT(*) FROM dns_queries", [], |r| r.get(0))?;
+            let domains: i64 =
+                conn.query_row("SELECT COUNT(*) FROM dns_domains", [], |r| r.get(0))?;
+            let oldest: Option<f64> =
+                conn.query_row("SELECT MIN(ts) FROM dns_queries", [], |r| r.get(0))?;
+            Ok(IngestStats {
+                queries,
+                domains,
+                oldest_ts: oldest,
+            })
+        })
+        .await
+    }
+
     async fn with_conn<T, F>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
