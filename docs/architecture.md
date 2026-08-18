@@ -1,0 +1,191 @@
+# 構成図
+
+モジュールの関係と、処理の流れを図にした文書。**コードを読む前に「どこに何があるか」を
+掴むため**に置いている。各モジュールの中の決めごとは [`CLAUDE.md`](../CLAUDE.md) にある。
+
+## モジュールの関係
+
+```mermaid
+classDiagram
+    class main {
+        +main() 設定を読む・DBを開く・ルーターを組む・取り込みを起こす
+    }
+    class config {
+        +Config
+        +from_env() 環境変数を1か所で読む
+    }
+    class AppState {
+        +Db db
+        +PiholeClient pihole
+        +Ai ai
+    }
+    class pages {
+        +router() 画面とアイコンを配信（実行ファイルに埋め込み）
+    }
+    class api {
+        +/api/domains ブロック済みの一覧
+        +/api/watch 未ブロックの怪しい候補
+        +/api/watch/baseline 監視の基準日時
+        +/api/review 判定（問題なし/問題あり）
+        +/api/note メモ
+        +/api/ask まとめて聞く
+        +/api/investigate 1件を詳しく調べる
+        +/api/ai 相手の一覧と選択
+    }
+    class ingest {
+        +run() 定期取り込みを回し続ける
+        +backfill() 遡ってドメインの初出を埋める
+    }
+    class watch {
+        +candidates() 怪しい候補を5つの手で拾う
+    }
+    class Db {
+        +records() 判断（メモ・判定・調査結果）
+        +insert_queries() 取り込んだクエリ
+        +domain_profile() 1件の観測データ
+    }
+    class PiholeClient {
+        +blocked_domains()
+        +queries_since()
+        +domain_counts()
+        -sid 使い回すセッション
+    }
+    class Ai {
+        +ask_about_domains() 選んだ全員に短く
+        +investigate() メイン1人に深く
+        +primary_target()
+    }
+    class ChiezoClient {
+        +backends() 話せる相手
+        +complete() 1往復（webの可否つき）
+    }
+    class ClaudeClient {
+        +ask_within() CLIブリッジへ
+        +load_token()
+    }
+
+    main --> config
+    main --> AppState
+    main --> ingest
+    AppState --> Db
+    AppState --> PiholeClient
+    AppState --> Ai
+    api --> AppState
+    api --> watch
+    pages ..> main : ルーターに合流
+    ingest --> Db
+    ingest --> PiholeClient
+    watch --> Db
+    Ai --> ChiezoClient
+    Ai --> ClaudeClient
+    Ai --> Db : 相手の選択
+```
+
+**外部に出ていくのは `PiholeClient` / `ChiezoClient` / `ClaudeClient` の3つだけ。**
+ブラウザは Pi-hole も Chiezo も直接は見ない（`/api/*` だけを叩く）——
+Pi-hole のパスワードをブラウザに配らないため。
+
+## 起動してから
+
+```mermaid
+sequenceDiagram
+    participant M as main
+    participant D as Db
+    participant I as ingest（別タスク）
+    participant P as Pi-hole
+    participant B as ブラウザ
+
+    M->>D: open（テーブル作成 + 古いDBの差分を埋める）
+    M->>I: spawn（画面の応答を待たせない）
+    M->>M: 7060 で待ち受け
+
+    loop 起動直後 → 以後 DNS_INGEST_INTERVAL ごと
+        I->>D: 遡り済みの日数を読む
+        alt 足りない
+            I->>P: 日ごとのドメイン集計（許可 + ブロック）
+            I->>D: dns_domains に初出を反映
+        end
+        I->>P: カーソル以降のクエリ（窓を重ねて取る）
+        I->>D: dns_queries / dns_domains / dns_client_daily
+        I->>D: 保持期間を過ぎた生クエリを消す
+    end
+
+    B->>M: GET /api/watch
+    M->>D: 初出・NXDOMAIN・種別・周期・ラベルの形
+    M-->>B: 候補 + 「どこまで見えているか」
+```
+
+## 2つの一覧
+
+**材料も判定も違うので、口を分けてある。**
+
+```mermaid
+flowchart LR
+    subgraph 画面
+      T1[ブロック済み]
+      T2[未ブロックの監視]
+    end
+    subgraph サーバ
+      A["/api/domains"]
+      W["/api/watch"]
+    end
+    P[(Pi-hole)]
+    Q[(dns_queries<br/>dns_domains)]
+    N[(domain_notes)]
+
+    T1 --> A --> P
+    T2 --> W --> Q
+    A --> N
+    W --> N
+```
+
+- **ブロック済み**は Pi-hole をその場で叩いた集計（貯めたものは使わない）
+- **未ブロックの監視**は貯めた過去との突き合わせ（Pi-hole は叩かない）
+- どちらも `domain_notes` を重ねるので、**メモ・判定・調査結果は両方の一覧で共有される**
+
+## 2つの聞き方
+
+```mermaid
+flowchart TB
+    B1["まとめてAIに聞く<br/>（ツールバー）"] --> ASK["/api/ask"]
+    B2["詳しく調べる<br/>（行のボタン）"] --> INV["/api/investigate"]
+
+    ASK --> ALL["チェックした全員<br/>10件ずつ・1〜2文・webなし"]
+    INV --> ONE["メインの1人<br/>1件・見出し付きの文章・web検索あり"]
+
+    INV -.-> PROF["観測データ<br/>（端末・回数・状態の内訳）"]
+    PROF -.-> ONE
+
+    ALL --> NOTE["domain_notes.note"]
+    ONE --> RES["domain_notes.research<br/>（メモとは別）"]
+```
+
+**「詳しく調べる」に観測データを渡すのが要点。** そのドメインが何かは web でも分かるが、
+**このネットワークでどう振る舞っているか**はこちらしか知らない。両方を突き合わせて初めて
+「放っておいてよいか」が言える。
+
+## 判定の流れ
+
+```mermaid
+stateDiagram-v2
+    [*] --> 未確認
+    未確認 --> 問題あり : 問題のある通信だった<br/>（ブロックされて当然）
+    未確認 --> 問題なし : 怪しく見えただけで<br/>無害だった（誤検知）
+    問題あり --> 未確認 : 未確認に戻す
+    問題なし --> 未確認 : 未確認に戻す
+
+    note right of 未確認
+        メモと調査結果は
+        どの状態でも書ける
+        （判定とは独立）
+    end note
+```
+
+**測っているのは「そのドメイン自身が問題のある通信か」**であって、「人が対処すべきか」ではない。
+一覧に並ぶものは「ブロックが妥当だったもの」と「怪しく見えただけのもの」の混ざりもので、
+**「確認済み」の一語に畳むと、何が誤検知だったのかが分からなくなる**。
+
+## 更新の手順
+
+図はコードに追従させる。**モジュールを足した・口を足した・状態を増やしたときは、
+同じコミットでこの文書も直す**（DBの形を変えたときは [`database.md`](database.md) も）。

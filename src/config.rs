@@ -43,6 +43,9 @@ pub struct Config {
     /// Chiezo(LAN 内の知識サーバー)の**ルート URL**。空なら使わない。
     /// **`/v1` は付けない** —— 呼ぶ側が `/v1/ai/...` を足す。
     pub chiezo_base_url: String,
+    /// 「詳しく調べる」1回の上限。**通常の問い合わせよりずっと長い** ——
+    /// web 検索を伴うので、1〜2文のメモを書かせるのとは桁が違う。
+    pub investigate_timeout: Duration,
     /// Chiezo 越しの1回の生成の上限。相手は CLI や大きいモデルなので、
     /// **ブリッジ経由(`claude_timeout`)より長めの既定にしてある**。
     pub chiezo_timeout: Duration,
@@ -92,6 +95,7 @@ impl Config {
                 .trim()
                 .trim_end_matches('/')
                 .to_string(),
+            investigate_timeout: Duration::from_secs(env_parse("INVESTIGATE_TIMEOUT", 300)),
             chiezo_timeout: Duration::from_secs(env_parse("CHIEZO_TIMEOUT", 180)),
             state_dir,
             claude_token_path: data_dir.join("claude_token"),

@@ -56,6 +56,24 @@ const SYSTEM_PROMPT: &str = "あなたはDNSとネットワークに詳しい技
     n は入力の番号です。番号は必ず入力どおりに対応させ、ドメイン名は書かないでください。\
     分からないドメインも推測せず、その旨を1文で書いてください。";
 
+/// 「詳しく調べる」の指示文。**メモを書かせる `SYSTEM_PROMPT` とは役割が違う。**
+///
+/// あちらは一覧に並ぶ1〜2文で、何十件もまとめて書かせるためのもの。こちらは
+/// **1件を深く調べる**ためのもので、web 検索と、こちらが渡す観測データの両方を使わせる。
+/// だから長さの制限も緩く、出力は JSON ではなく素の文章にしてある ——
+/// **1件ぶんの答えを1つ返すだけなので、番号で対応させる必要が無い**
+/// (JSON にすると、長い文章を JSON 文字列へ押し込む過程で崩れる余地が増える)。
+///
+/// **観測データを渡すのが要点。** 「そのドメインが何か」は web でも分かるが、
+/// 「この家のネットワークでどう振る舞っているか」はこちらしか知らない。
+/// 両方を突き合わせて初めて「放っておいてよいか」が言える。
+const INVESTIGATE_PROMPT: &str = "あなたはDNSとネットワークセキュリティに詳しい技術者です。    家庭内のPi-holeが観測したドメインについて、利用者が「放置してよいか、止めるべきか」を    判断できるように日本語で調べてください。    web検索が使えるなら、そのドメインの運営元・用途・既知の評判を調べてください。    あわせて、利用者のネットワークでの観測データ(このあと渡します)を必ず踏まえてください。    次の見出しで、それぞれ1〜3文で簡潔に書いてください。
+    ■ 何のドメインか(運営元と用途)
+    ■ どの製品・アプリが使うか(観測データの端末と矛盾しないか)
+    ■ 通信の中身と頻度から言えること
+    ■ 放置してよいか(止める場合の影響も)
+    分からないことは推測せず「不明」と書いてください。    見出し以外の前置き・結び・コードフェンスは書かないでください。";
+
 /// 1回の問い合わせに渡せるドメインの上限。**多すぎると応答が崩れる** ——
 /// tech-antenna では200件を1回に詰めて300秒のタイムアウトを超え、まとめて失敗した。
 /// 「まとめて聞く」はこの数ずつに区切って何度も呼ぶので、進捗が出るし途中まででも残る。
@@ -76,6 +94,12 @@ pub struct AiChoice {
     /// 考える量(未指定なら相手の既定)。
     #[serde(default)]
     pub effort: Option<String>,
+    /// **メインの相手か。** 「詳しく調べる」はこの1人だけに頼む ——
+    /// web 検索を伴って時間も枠も使うので、選んだ全員に投げる話ではない。
+    /// **`default` にしてある**ので、この列より前に保存した選択もそのまま読める
+    /// (誰も立っていなければ先頭をメインとして扱う)。
+    #[serde(default)]
+    pub primary: bool,
 }
 
 impl AiChoice {
@@ -91,6 +115,7 @@ impl AiChoice {
             label: BRIDGE_LABEL.to_string(),
             model: None,
             effort: None,
+            primary: true,
         }
     }
 
@@ -140,6 +165,10 @@ pub struct Ai {
     /// URL 未設定なら `None`(画面が設定の仕方を出す)。
     chiezo: Option<ChiezoClient>,
     claude: ClaudeClient,
+    /// 通常の問い合わせ(メモを書かせる)の上限。
+    chiezo_timeout: std::time::Duration,
+    /// 「詳しく調べる」の上限。**web 検索を伴うのでずっと長い**。
+    investigate_timeout: std::time::Duration,
 }
 
 impl Ai {
@@ -148,6 +177,8 @@ impl Ai {
             db,
             chiezo: ChiezoClient::new(config)?,
             claude: ClaudeClient::new(config)?,
+            chiezo_timeout: config.chiezo_timeout,
+            investigate_timeout: config.investigate_timeout,
         })
     }
 
@@ -200,13 +231,36 @@ impl Ai {
 
     /// 実際に聞く相手。**空なら CLI ブリッジ** —— 何も選んでいない状態でも
     /// 従来どおり動く(Chiezo を使わない環境がそれ)。
+    ///
+    /// **メインを先頭にそろえる。** この並びがそのまま2か所に出る ——
+    /// ツールバーのボタンに出す名前(先頭を出す)と、まとめて聞いたときにメモへ並ぶ順
+    /// (`compose_notes` はこの順で書く)。**普段いちばん信用している相手が
+    /// 先頭に来ていないと、ボタンの名前もメモの1行目も当てにならない**。
+    /// 残りは保存した順のまま(呼ぶたびに並びが変わると読み比べにくい)。
     async fn targets(&self) -> Vec<AiChoice> {
         let selections = self.selections().await;
         if selections.is_empty() {
-            vec![AiChoice::bridge()]
-        } else {
-            selections
+            return vec![AiChoice::bridge()];
         }
+        let mut targets = selections;
+        // 安定な並べ替え。メインが立っていなければ何も動かない(先頭がそのまま先頭)
+        targets.sort_by_key(|t| !t.primary);
+        targets
+    }
+
+    /// **「詳しく調べる」を頼む1人。** 立っていなければ先頭、選択が空なら CLI ブリッジ。
+    ///
+    /// **必ず1人に決まる。** 決まらないと「押したのに誰も答えない」が起きるし、
+    /// 全員に投げると web 検索ぶんの時間と枠が人数倍になる。
+    pub async fn primary_target(&self) -> AiChoice {
+        // `targets` がメインを先頭にそろえてあるので、先頭がそのままメイン
+        // (誰も立っていなければ先頭が代わりを務める)
+        self.targets().await.remove(0)
+    }
+
+    /// メインの相手の識別子(画面のラジオを立てるのに使う)。
+    pub async fn primary_backend(&self) -> String {
+        self.primary_target().await.backend
     }
 
     /// 選択を保存する。空なら CLI ブリッジ経由に戻す。
@@ -321,6 +375,9 @@ impl Ai {
                     &target.backend,
                     target.model.as_deref(),
                     target.effort.as_deref(),
+                    // メモを1〜2文で書かせるだけなので web は要らない
+                    false,
+                    self.chiezo_timeout,
                     SYSTEM_PROMPT,
                     user_prompt,
                 )
@@ -337,6 +394,58 @@ impl Ai {
         let notes = parse_notes(&text, domains)
             .map_err(|e| AskError::Failed(format!("{e}(相手: {author})")))?;
         Ok((author, notes))
+    }
+
+    /// **1件のドメインを詳しく調べる。** 頼むのは[`Self::primary_target`]の1人だけ。
+    ///
+    /// `profile` はこちらが観測した事実(件数・初出・端末・状態の内訳など)。
+    /// **web 検索と観測データの両方を渡す**ので、通常の問い合わせよりずっと時間がかかる
+    /// (上限は `INVESTIGATE_TIMEOUT`)。
+    ///
+    /// 戻り値は (書き手の名前, 調べた結果)。**メモの書式は通常と同じ**
+    /// (`[書き手] 本文`)にして、画面が出し分けなくて済むようにしてある。
+    pub async fn investigate(&self, domain: &str, profile: &str) -> Result<(String, String), AskError> {
+        let target = self.primary_target().await;
+        let user_prompt = format!(
+            "調べる対象のドメイン: {domain}
+
+             このネットワークでの観測データ:
+{profile}"
+        );
+
+        let (text, author) = if target.is_bridge() {
+            let text = self
+                .claude
+                .ask_within(INVESTIGATE_PROMPT, &user_prompt, self.investigate_timeout)
+                .await?;
+            (text, BRIDGE_LABEL.to_string())
+        } else {
+            let Some(chiezo) = self.chiezo.as_ref() else {
+                return Err(AskError::Failed("Chiezo の URL が未設定です".to_string()));
+            };
+            let completion = chiezo
+                .complete(
+                    &target.backend,
+                    target.model.as_deref(),
+                    target.effort.as_deref(),
+                    // **ここは web を立てる。** 運営元や評判は手元のデータからは分からない
+                    true,
+                    self.investigate_timeout,
+                    INVESTIGATE_PROMPT,
+                    &user_prompt,
+                )
+                .await
+                .map_err(AskError::Failed)?;
+            let label = completion.label.unwrap_or_else(|| target.label.clone());
+            let model = completion.model.or_else(|| target.model.clone());
+            (completion.content, name_with_model(&label, model.as_deref()))
+        };
+
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(AskError::Failed(format!("{author} が空の答えを返しました")));
+        }
+        Ok((author.clone(), format!("[{author}] {text}")))
     }
 
     /// CLI ブリッジ用のトークンが保存されているか。**値は返さない** ——

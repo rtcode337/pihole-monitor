@@ -91,6 +91,17 @@ impl ClaudeClient {
     /// ブリッジ経由で Claude に聞く。**プロンプトは受け取る** —— 相手が Chiezo 越しでも
     /// 同じ文言になるよう、指示文は `ai.rs` の1か所に置いてある。
     pub async fn ask(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AskError> {
+        self.ask_within(system_prompt, user_prompt, self.timeout).await
+    }
+
+    /// 上限秒数を指定して聞く。**「詳しく調べる」は web 検索を伴って長くかかる**ので、
+    /// 通常の問い合わせと同じ上限だと必ず途中で切れる。
+    pub async fn ask_within(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        timeout: std::time::Duration,
+    ) -> Result<String, AskError> {
         if self.load_token().is_none() {
             return Err(AskError::TokenRequired);
         }
@@ -105,15 +116,18 @@ impl ClaudeClient {
                     {"role": "user", "content": user_prompt},
                 ],
                 "chiezo_max_turns": MAX_TURNS,
-                "chiezo_timeout": self.timeout.as_secs_f64(),
+                "chiezo_timeout": timeout.as_secs_f64(),
             }))
+            // **こちらの待ちはブリッジより長くする。** 先に切れると、
+            // 向こうが何秒で諦めたのかが分からなくなる
+            .timeout(timeout + std::time::Duration::from_secs(30))
             .send()
             .await;
 
         let response = match response {
             Ok(response) => response,
             Err(e) if e.is_timeout() => {
-                tracing::warn!(timeout_secs = self.timeout.as_secs(), "CLIブリッジへの問い合わせがタイムアウトした");
+                tracing::warn!(timeout_secs = timeout.as_secs(), "CLIブリッジへの問い合わせがタイムアウトした");
                 return Err(AskError::Failed("timeout".to_string()));
             }
             Err(e) => {
@@ -126,7 +140,7 @@ impl ClaudeClient {
         let body = response.text().await.unwrap_or_default();
 
         if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
-            tracing::warn!(timeout_secs = self.timeout.as_secs(), "CLIブリッジが上限秒数で打ち切った");
+            tracing::warn!(timeout_secs = timeout.as_secs(), "CLIブリッジが上限秒数で打ち切った");
             return Err(AskError::Failed("timeout".to_string()));
         }
 

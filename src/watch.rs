@@ -23,9 +23,16 @@ use serde::Serialize;
 
 use crate::db::Db;
 
-/// 見る窓(秒)。**初出もNXDOMAINもこの窓で数える。**
+/// 基準日時が未設定のときに見る窓(秒)。**初出もNXDOMAINもこの窓で数える。**
 /// 長くすると候補が増えて読めなくなり、短くすると寝ている間の出来事を見落とす。
 const WINDOW_SECS: f64 = 24.0 * 3600.0;
+
+/// 基準日時の置き場(`settings` 表のキー)。値は unix 秒。
+///
+/// **ネットワークの設定を変えた日の前後は、同じ画面に別の環境の記録が混ざる。**
+/// 例えばDHCPが配るDNSを変えると、変える前の通信はぜんぶルーター発として記録されていて、
+/// 変えた後の「どの端末が」とは噛み合わない。**そこを境に切れる**ようにしてある。
+pub const BASELINE_KEY: &str = "watch:baseline";
 
 /// NXDOMAIN を「多発」と呼ぶ下限。1〜2回は打ち間違いや一時的な失敗で普通に出る。
 const NXDOMAIN_MIN: i64 = 5;
@@ -112,7 +119,12 @@ pub struct WatchItem {
     pub domain: String,
     pub count: i64,
     pub reviewed: bool,
+    /// `""` = 未確認 / `"issue"` = 問題あり(ブロックされて当然) / `"ok"` = 問題なし(無害だった)
+    pub verdict: String,
     pub note: String,
+    /// 「詳しく調べる」の結果（詳細画面でメモの上に出す）
+    pub research: String,
+    pub researched_at: String,
     pub reasons: Vec<Reason>,
     /// この窓で引いた端末(分かる範囲)
     pub clients: Vec<String>,
@@ -129,6 +141,14 @@ pub struct WatchResult {
     pub ready: bool,
     pub backfill_days: i64,
     pub window_hours: i64,
+    /// 設定されている基準日時(unix秒)。未設定なら `None`
+    pub baseline: Option<i64>,
+    /// 実際に見はじめる時刻(unix秒)。基準日時が古すぎるときは丸めた後の値
+    pub since: i64,
+    /// 基準日時が遡り取り込みの範囲より古くて丸めたか。
+    /// **丸めたことは画面に出す** —— 黙って狭めると「設定した日から見ているつもり」で
+    /// 実際は違う、という食い違いが起きる
+    pub baseline_clamped: bool,
     /// 生のクエリが実際に何時間ぶん貯まっているか(NXDOMAIN・種別はこの範囲しか見ていない)
     pub data_hours: f64,
     pub total_domains: i64,
@@ -139,11 +159,20 @@ pub struct WatchResult {
 
 /// 候補を組み立てる。
 pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
-    let since_ts = now - WINDOW_SECS;
-    let since_secs = since_ts as i64;
-
     let backfill_days = db.backfilled_days().await?;
     let stats = db.ingest_stats().await?;
+
+    // **基準日時があればそこから、無ければ既定の窓から見る。**
+    // 遡り取り込みの範囲より前には戻れない(初出の判定に使う `first_seen` を
+    // そこまでしか知らないので、それ以前は「はじめて見た」が嘘になる)
+    let baseline = db.setting(BASELINE_KEY).await?.and_then(|v| v.parse::<i64>().ok());
+    let oldest_allowed = now - (backfill_days.max(1) as f64) * 86_400.0;
+    let (since_ts, baseline_clamped) = match baseline {
+        Some(at) if (at as f64) < oldest_allowed => (oldest_allowed, true),
+        Some(at) => (at as f64, false),
+        None => (now - WINDOW_SECS, false),
+    };
+    let since_secs = since_ts as i64;
 
     // 理由をドメインごとに束ねる。**同じドメインを手ごとに何度も並べない** ——
     // 一覧が重複で埋まると、件数が実際より多く見える
@@ -223,7 +252,10 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
                 first_seen: first_seen.get(&domain).copied().unwrap_or(0),
                 count,
                 reviewed: record.map(|r| r.reviewed).unwrap_or(false),
+                verdict: record.map(|r| r.verdict.clone()).unwrap_or_default(),
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
+                research: record.map(|r| r.research.clone()).unwrap_or_default(),
+                researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
                 reasons,
                 clients,
                 domain,
@@ -250,7 +282,11 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
     Ok(WatchResult {
         ready: backfill_days > 0,
         backfill_days,
-        window_hours: (WINDOW_SECS / 3600.0) as i64,
+        // 実際に見ている長さ(基準日時があればそこからの時間)
+        window_hours: (((now - since_ts) / 3600.0).round() as i64).max(0),
+        baseline,
+        since: since_secs,
+        baseline_clamped,
         data_hours,
         total_domains: stats.domains,
         qtypes,

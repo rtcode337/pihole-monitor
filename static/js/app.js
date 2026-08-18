@@ -30,9 +30,9 @@ let detailDomain = null;
 // チェックした行。**再描画をまたいで残す**（行のDOMは作り直される）
 const selectedDomains = new Set();
 
-// 「まとめてAIに聞く」1回の上限の既定。**未確認は常に全件聞き直す**ので、
-// 枠と時間を使いすぎないための歯止めが要る（画面で変えられ、localStorageに残る）
-const BULK_LIMIT_DEFAULT = 20;
+// 「まとめてAIに聞く」1回の上限の既定。枠と時間を使いすぎないための歯止め
+// （画面で変えられ、localStorageに残る）
+const BULK_LIMIT_DEFAULT = 100;
 
 // 1リクエストで聞く件数。**サーバ側の MAX_DOMAINS_PER_ASK と同じ値にすること**
 // （超えると 400 で断られる）。区切って何度も呼ぶので進捗が出せて、
@@ -69,6 +69,14 @@ function toggleTheme() {
 
 // OS の設定に従っている間は、OS 側の切り替えにボタンの印も追従させる
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', renderTheme);
+
+// ISO8601 を「8/19 00:12」の形にする。**秒とタイムゾーンは出さない** ——
+// 見出しの添え物なので、いつ調べたかが分かれば足りる
+function shortTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -109,19 +117,81 @@ async function loadDomains() {
   }
 }
 
+// unix秒 → datetime-local が受け取る形（ローカル時刻の "YYYY-MM-DDTHH:MM"）。
+// **UTCのISO文字列をそのまま入れない** —— 入力欄はローカル時刻として読むので9時間ずれる
+function toLocalInput(unixSecs) {
+  const d = new Date(unixSecs * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// 基準日時を保存する。`useNow` なら入力欄を見ずに現在時刻にする
+// （ネットワークの設定を変えた直後はこれが一番よく使う操作）
+async function saveBaseline(useNow) {
+  let at;
+  if (useNow) {
+    at = Math.floor(Date.now() / 1000);
+  } else {
+    const raw = document.getElementById('baseline-at').value;
+    if (!raw) { showToast('日時を入れてください', 'error'); return; }
+    at = Math.floor(new Date(raw).getTime() / 1000);
+    if (!Number.isFinite(at)) { showToast('日時を読めませんでした', 'error'); return; }
+  }
+  await postBaseline(at, `${toLocalInput(at)} 以降を見るようにしました`);
+}
+
+async function clearBaseline() {
+  await postBaseline(null, '基準日時を解除しました（直近24時間に戻ります）');
+}
+
+async function postBaseline(at, message) {
+  try {
+    const resp = await fetch('/api/watch/baseline', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({at})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      showToast(message, 'success');
+      // **保存したら読み直す。** 候補も前置きもこの日時から作り直される
+      loadDomains();
+      return;
+    }
+    showToast(result.error || '保存できませんでした', 'error');
+  } catch(e) {
+    showToast('エラーが発生しました', 'error');
+  }
+}
+
 // 監視モードの前置き。**「どこまで見えているか」を必ず出す** ——
 // 材料が貯まっていない時期の「0件」を、平穏だと読み違えないため
 function renderWatchContext() {
   const box = document.getElementById('watch-context');
-  if (currentMode !== 'watch' || !watchMeta) { box.hidden = true; return; }
+  const bar = document.getElementById('watch-baseline');
+  if (currentMode !== 'watch' || !watchMeta) { box.hidden = true; bar.hidden = true; return; }
   const m = watchMeta;
+
+  // 基準日時の入力欄を、いまの設定に合わせる（未設定なら空）
+  bar.hidden = false;
+  document.getElementById('baseline-at').value = m.baseline ? toLocalInput(m.baseline) : '';
+
   const parts = [];
   if (!m.ready) {
     parts.push('<strong class="watch-warn">⚠️ 過去の取り込みがまだ終わっていません。'
       + 'いまは「はじめて見た」が当てになりません</strong>（過去を知らないので、すべてが初出に見えます）。');
   }
-  parts.push(`直近 ${m.window_hours} 時間を、過去 ${m.backfill_days} 日ぶんの記録（${(m.total_domains||0).toLocaleString()} ドメイン）と`
-    + `突き合わせています。件数と種別は手元に貯まっている ${Math.floor(m.data_hours)} 時間ぶんが対象です。`);
+  if (m.baseline_clamped) {
+    parts.push(`<strong class="watch-warn">⚠️ 基準日時が古すぎるので、過去 ${m.backfill_days} 日に丸めました</strong>`
+      + `（それより前は「はじめて見た」を判定できません）。`);
+  }
+  parts.push(m.baseline
+    ? `<strong>${escapeHtml(shortTime(new Date(m.since * 1000).toISOString()))} 以降</strong>`
+      + `（${m.window_hours} 時間ぶん）を、過去 ${m.backfill_days} 日ぶんの記録`
+      + `（${(m.total_domains||0).toLocaleString()} ドメイン）と突き合わせています。`
+      + `件数と種別は手元に貯まっている ${Math.floor(m.data_hours)} 時間ぶんが対象です。`
+    : `直近 ${m.window_hours} 時間を、過去 ${m.backfill_days} 日ぶんの記録（${(m.total_domains||0).toLocaleString()} ドメイン）と`
+      + `突き合わせています。件数と種別は手元に貯まっている ${Math.floor(m.data_hours)} 時間ぶんが対象です。`);
   if (m.qtypes && m.qtypes.length) {
     const shown = m.qtypes.map(([t, n]) => `${t} ${n.toLocaleString()}`).join(' / ');
     parts.push(`<span class="watch-qtypes">この間に出たクエリ種別: ${escapeHtml(shown)}</span>`);
@@ -140,6 +210,11 @@ function showFetchError() {
 
 function updateStats() {
   const newCount = allDomains.filter(d => !d.reviewed).length;
+  // **仕分けが済んだ件数（問題あり + 問題なし）を出す。** 内訳を数字にしていた時期が
+  // あったが、**同じ数字なのにタブで読み方が逆になる** —— 未ブロックの監視では
+  // 「見つけた問題の数」（多いほど困る）、ブロック済みでは「ブロックが妥当だと
+  // 確かめた数」（多いほど順調）。ここで見たいのは「あとどれだけ仕分けが残っているか」で、
+  // 済んだものが問題ありだったか問題なしだったかは、絞り込みで見れば足りる
   const reviewedCount = allDomains.filter(d => d.reviewed).length;
   document.getElementById('stat-new').textContent = newCount;
   document.getElementById('stat-reviewed').textContent = reviewedCount;
@@ -161,13 +236,27 @@ function setFilter(filter, event) {
 // 同じ1か所から出るようにする（食い違うと、見えていない行にメモが付く）
 function filteredDomains() {
   if (currentFilter === 'new') return allDomains.filter(d => !d.reviewed);
-  if (currentFilter === 'reviewed') return allDomains.filter(d => d.reviewed);
+  // **判定は2つに分ける。** 一覧に並ぶものは「ブロックが妥当だったもの」と
+  // 「怪しく見えただけのもの」が混ざっていて、「確認済み」の一語に畳むと
+  // **何が誤検知だったのかが分からなくなる**
+  if (currentFilter === 'ok') return allDomains.filter(d => d.verdict === 'ok');
+  if (currentFilter === 'issue') return allDomains.filter(d => d.verdict === 'issue');
   return allDomains;
 }
 
 // 候補が挙がった理由。**必ず出す** —— 「なぜこれが並んでいるのか」が読めない一覧は、
 // 誤検知か本物かを人が判断できず、結局まるごと無視されることになる。
 // ブロック済みの行には reasons が無いので、そのときは何も出さない
+// 判定のバッジ。`issue` = そのドメインが問題のある通信（ブロックされて当然）、
+// `ok` = 怪しい候補として挙がったが無害だった
+function verdictBadge(d) {
+  if (d.verdict === 'issue') return '<span class="badge issue">問題あり</span>';
+  if (d.verdict === 'ok') return '<span class="badge reviewed">問題なし</span>';
+  // 判定を持たない確認済み（旧データ）は、そうと分かるように出す
+  if (d.reviewed) return '<span class="badge reviewed">確認済</span>';
+  return '';
+}
+
 function reasonsHtml(d) {
   if (!d.reasons || !d.reasons.length) return '';
   const items = d.reasons
@@ -212,20 +301,21 @@ function renderDomains() {
         <!-- 未確認の行にバッジは出さない。**既読管理はしていないので「NEW」は嘘になる**
              （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
              「確認済」バッジの有無で足りる -->
-        ${d.reviewed ? '<span class="badge reviewed">確認済</span>' : ''}
+        ${verdictBadge(d)}
         <!-- 1件だけ聞く。**答えはそのままメモになる**（回答を見せるモーダルは無い）。
              聞いている間は押せないようにする —— 状態は askingDomains に持つ（この行のDOMは
              再描画で作り直されるため） -->
         ${askingDomains.has(d.domain)
-          ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 聞いています…</button>`
-          : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" title="${d.note ? 'AIに聞いてメモを置き換える' : 'AIに聞いてメモにする'}">${AI_ICON} AIに聞く</button>`
+          ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 調べています…</button>`
+          : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（結果はメモになります）">${AI_ICON} 詳しく調べる</button>`
         }
         <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
         <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
         <!-- **data-note を必ず渡す。** 渡さないと this.dataset.note が undefined になり、
              メモ欄が空のまま開いて「確認済みにする」がAIの書いたメモを空で上書きしていた -->
         ${!d.reviewed
-          ? `<button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
+          ? `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'ok')" title="調べた結果、無害な通信だと分かった（怪しく見えただけ）">問題なし</button>
+             <button class="action-btn issue-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'issue')" title="調べた結果、問題のある通信だと分かった（ブロックされて当然）">問題あり</button>`
           : `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
         }
       </div>
@@ -270,6 +360,7 @@ function renderSelection(filtered) {
   const count = selectedDomains.size;
   document.getElementById('select-count').textContent = `${count} 件選択`;
   document.getElementById('select-review-btn').disabled = count === 0;
+  document.getElementById('select-issue-btn').disabled = count === 0;
   document.getElementById('select-clear-btn').disabled = count === 0;
   const all = document.getElementById('select-all');
   all.checked = filtered.length > 0 && count === filtered.length;
@@ -277,7 +368,7 @@ function renderSelection(filtered) {
 
 // チェックした行をまとめて確認済みにする。**メモは送らない** ——
 // サーバ側が「渡されなければ触らない」ので、AIに聞いた結果が消えない
-async function reviewSelected() {
+async function reviewSelected(verdict) {
   const domains = [...selectedDomains];
   if (domains.length === 0) return;
   const btn = document.getElementById('select-review-btn');
@@ -287,21 +378,21 @@ async function reviewSelected() {
     const resp = await fetch('/api/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains})
+      body: JSON.stringify({domains, verdict})
     });
     const result = await resp.json();
     if (result.success) {
       for (const domain of domains) {
         const item = allDomains.find(d => d.domain === domain);
-        if (item) item.reviewed = true;
+        if (item) { item.reviewed = true; item.verdict = verdict; }
       }
       selectedDomains.clear();
       updateStats();
       renderDomains();
-      showToast(`${result.count || domains.length} 件を確認済みにしました`, 'success');
+      showToast(`${result.count || domains.length} 件を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
       return;
     }
-    showToast('確認済みにできませんでした', 'error');
+    showToast('保存できませんでした', 'error');
   } catch(e) {
     showToast('エラーが発生しました', 'error');
   }
@@ -316,7 +407,9 @@ function openModal(domain, existingNote = '') {
   document.getElementById('modal-note').value = existingNote;
   // 既に確認済みなら「確認済みにする」は出さない（押しても何も変わらないボタンを置かない）
   const item = allDomains.find(d => d.domain === domain);
-  document.getElementById('modal-review-btn').hidden = !!(item && item.reviewed);
+  const decided = !!(item && item.reviewed);
+  document.getElementById('modal-review-btn').hidden = decided;
+  document.getElementById('modal-issue-btn').hidden = decided;
   document.getElementById('modal').style.display = 'flex';
   document.getElementById('modal-note').focus();
 }
@@ -371,12 +464,20 @@ function renderDetail() {
 
   const asking = askingDomains.has(d.domain);
   document.getElementById('detail-body').innerHTML = `
+    ${asking ? '<div class="detail-running">AIが調べています…（web検索を伴うので数十秒かかります）</div>' : ''}
     <div class="detail-domain">${escapeHtml(d.domain)}<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
     <div class="detail-meta">
-      <span class="badge ${d.reviewed ? 'reviewed' : 'unreviewed'}">${d.reviewed ? '確認済' : '未確認'}</span>
+      ${d.reviewed ? verdictBadge(d) : '<span class="badge unreviewed">未確認</span>'}
       <span>${d.reasons ? '直近' : 'ブロック'} ${d.count.toLocaleString('ja-JP')} 回</span>
     </div>
     ${reasonsHtml(d)}
+    ${d.research ? `
+      <div class="detail-label detail-label-row">
+        <span>AIの調査結果${d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
+        <button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>
+      </div>
+      <div class="detail-research">${escapeHtml(d.research)}</div>
+    ` : ''}
     <div class="detail-label">メモ</div>
     <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
   `;
@@ -386,13 +487,14 @@ function renderDetail() {
   document.getElementById('detail-actions').innerHTML = `
     <button class="action-btn cancel-btn" onclick="closeDetailModal()">閉じる</button>
     ${asking
-      ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 聞いています…</button>`
-      : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)">${AI_ICON} AIに聞く</button>`
+      ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 調べています…</button>`
+      : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)">${AI_ICON} 詳しく調べる</button>`
     }
     <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)">${EDIT_ICON} メモを書く</button>
     ${d.reviewed
       ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
-      : `<button class="action-btn confirm-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)">確認済みにする</button>`
+      : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'ok')">問題なし</button>
+         <button class="action-btn issue-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'issue')">問題あり</button>`
     }
   `;
 }
@@ -405,10 +507,12 @@ function editNoteFromDetail(domain, note) {
 }
 
 
-// ---- 1件だけAIに聞く ----
-// 押したらそのままメモになる（回答を見せるモーダルは持たない）。保存はサーバ側で
-// 済んでいるので、ここでやるのは手元の一覧への反映だけ。
-// **まとめて聞くのと同じ口**（/api/ask に1件だけ渡す）—— 指示文も保存の仕方も1か所に保つ
+// ---- 1件を詳しく調べる ----
+// **「まとめてAIに聞く」とは役割が違う。** あちらは何十件ぶんの1〜2文のメモを
+// 選んだ全員に書かせるもの。こちらは**メインのAI1人**に、web検索とPi-holeの観測データを
+// 渡して1件を深く調べさせる。時間がかかる（web検索を伴うので数十秒〜数分）ぶん、
+// 押している間の見た目は行ごとに保つ（`askingDomains`）。
+// 結果はそのままメモになる（保存はサーバ側で済んでいる）。
 
 async function askOne(domain) {
   if (askingDomains.has(domain)) return;
@@ -417,10 +521,10 @@ async function askOne(domain) {
 
   let result;
   try {
-    const resp = await fetch('/api/ask', {
+    const resp = await fetch('/api/investigate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains: [domain]})
+      body: JSON.stringify({domain})
     });
     result = await resp.json();
   } catch(e) {
@@ -435,35 +539,48 @@ async function askOne(domain) {
     return;
   }
 
-  const entry = result.success && result.results && result.results[0];
-  if (entry) {
-    const item = allDomains.find(d => d.domain === entry.domain);
-    if (item) item.note = entry.note;
+  if (result.success && result.research) {
+    // **メモには入れない。** 人が書いた（あるいは「まとめてAIに聞く」が書いた）判断を
+    // 調査結果で上書きしないため。結果は詳細画面でメモの上に出す
+    const item = allDomains.find(d => d.domain === result.domain);
+    if (item) {
+      item.research = result.research;
+      item.researched_at = result.researched_at || '';
+    }
     renderDomains();
-    // 誰が書いたか（複数いる）と、答えられなかった相手を一緒に出す ——
-    // **1人落ちても残りは使う**ので、成功と失敗が同時に起きうる
-    const failed = (result.failures || []).length;
-    showToast(
-      `${domain} のメモを付けました（${(result.authors || []).join(' / ')}）`
-        + (failed ? ` — ${failed} 人は答えられませんでした` : ''),
-      failed ? 'error' : 'success');
+    // **調べ終わったら詳細を開く。** 30秒待たせておいて結果をどこにも出さないと、
+    // 押した人は何が起きたのか分からない（開いていれば renderDetail が描き直す）
+    if (detailDomain !== domain) openDetailModal(domain);
+    showToast(`${domain} を調べました（${result.author || 'AI'}）`, 'success');
     return;
   }
 
   renderDomains();
-  showToast(`聞けませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
+  showToast(`調べられませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
 }
 
 // ---- まとめてAIに聞く ----
 // いま一覧に出ているドメインを BULK_CHUNK 件ずつAIに聞き、結果をメモとして残す。
 // **確認済みにはしない** —— 調べただけの段階と、人が確認した段階は別
 
-// 対象は**未確認の全件**。メモがあっても聞き直す —— 確認済みにしていない行は
-// 「まだ判断していない」ので、最新の見立てで上書きしてよい。**確認済みは触らない**
-// （人が確認したメモをAIの文章で上書きしないため）。
+// 対象は**未確認のうちメモが無いもの**。空いているところを埋めるのが既定の動き ——
+// メモがあるものまで毎回聞き直すと、同じ答えを取り直すために枠と時間を使う。
+// **作り直しはチェックしたときだけ**（`bulk-regenerate`）。
+// **確認済みは触らない**（人が確認したメモをAIの文章で上書きしないため）。
 // **フィルターに関係なく未確認を見る**（表示を切り替えただけで対象が変わると分かりにくい）
 function bulkTargets() {
-  return allDomains.filter(d => !d.reviewed).map(d => d.domain);
+  const regenerate = bulkRegenerate();
+  return allDomains
+    .filter(d => !d.reviewed)
+    .filter(d => regenerate || !d.note)
+    .map(d => d.domain);
+}
+
+// 「すでにメモがあるものも作り直す」か。**覚えない** ——
+// 既定は「埋めるだけ」で、作り直しは押した回にだけ効いてほしい
+function bulkRegenerate() {
+  const box = document.getElementById('bulk-regenerate');
+  return !!(box && box.checked);
 }
 
 // 1回の実行で聞く上限。**覚えておく**（毎回入れ直させない）
@@ -489,10 +606,11 @@ function openBulkModal() {
   const limited = targets.slice(0, bulkLimit());
   const note = document.getElementById('bulk-note');
   note.className = 'bulk-note';
+  const regenerate = bulkRegenerate();
   note.textContent = targets.length === 0
-    ? '未確認のドメインがありません。'
-    : `未確認 ${targets.length} 件のうち ${limited.length} 件を ${aiName()} に聞き、`
-      + `結果をメモとして残します（メモがあっても聞き直します。確認済みの行は触りません）。`
+    ? (regenerate ? '未確認のドメインがありません。' : 'メモが空の未確認ドメインはありません（作り直すなら下のチェックを入れてください）。')
+    : `${regenerate ? '未確認' : 'メモが空の未確認'} ${targets.length} 件のうち ${limited.length} 件を ${aiName()} に聞き、`
+      + `結果をメモとして残します（確認済みの行は触りません）。`
       + `${BULK_CHUNK} 件ずつ順に聞くので、途中で失敗してもそこまでは残ります。`
       + (targets.length > limited.length
           ? ` 残り ${targets.length - limited.length} 件は上限のため今回は聞きません。`
@@ -627,9 +745,14 @@ function aiName() {
 
 function renderAiButton() {
   const names = aiNames();
-  // **ボタンには先頭 + 残りの人数**。全員並べるとツールバーが名前で埋まる
-  document.getElementById('ai-btn').textContent =
-    `AI: ${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ''}`;
+  // **ボタンに出すのはメインの相手**（サーバが先頭にそろえて返す）+ 残りの人数。
+  // 全員並べるとツールバーが名前で埋まるし、**普段いちばん信用している相手が
+  // 出ていないとボタンを見る意味が薄い**
+  const btn = document.getElementById('ai-btn');
+  btn.textContent = `AI: ${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ''}`;
+  btn.title = names.length > 1
+    ? `メイン: ${names[0]}（「詳しく調べる」の担当）／まとめて聞く相手: ${names.join(' / ')}`
+    : `聞く相手: ${names[0]}`;
 }
 
 function openAiModal(message) {
@@ -648,6 +771,15 @@ function closeAiModal() {
 
 function onAiOverlayClick(event) {
   if (event.target === document.getElementById('ai-modal')) closeAiModal();
+}
+
+// 「詳しく調べる」を頼む1人を選ぶラジオ。**チェック（まとめて聞く相手）とは別の軸**なので、
+// 同じ行に並べて役割の違いを名前で示す
+function primaryRadio(backend, current) {
+  const checked = backend === current ? 'checked' : '';
+  return `<label class="ai-row-primary" title="行の「詳しく調べる」を担当する1人">
+    <input type="radio" name="ai-primary" value="${escapeHtml(backend)}" ${checked}> メイン
+  </label>`;
 }
 
 function renderAiList() {
@@ -678,8 +810,11 @@ function renderAiList() {
     note.textContent = `Chiezo（${aiState.chiezo_url}）に話せる相手がいません。Chiezo 側で「答える」層を有効にしてください。`;
   } else {
     note.className = 'ai-note';
-    note.textContent = '選んだ相手ぜんぶに同じ内容を聞き、答えを「誰が書いたか」付きで'
-      + '1つのメモに並べます（再起動なしで切り替わります）。';
+    note.innerHTML = '<strong>チェック</strong>した相手ぜんぶに「まとめてAIに聞く」の内容を聞き、'
+      + '答えを「誰が書いたか」付きで1つのメモに並べます。'
+      + '<br><strong>メイン</strong>に選んだ1人だけが、行の「詳しく調べる」'
+      + '（web検索とPi-holeの観測データで1件を深く調べる）を担当します。'
+      + '<br>どちらも再起動なしで切り替わります。';
   }
 
   // 選択は複数。**保存済みの選択から、相手ごとのモデル・考える量を引く**
@@ -693,6 +828,7 @@ function renderAiList() {
                ${chosen.has(aiState.bridge_backend) ? 'checked' : ''}>
         <span class="ai-row-name">${escapeHtml(aiState.bridge_label)}</span>
       </label>
+      ${primaryRadio(aiState.bridge_backend, aiState.primary)}
       <!-- トークンの設定はこの行の中。**値は出さない**（登録済みかどうかだけ隣に出す） -->
       <div class="ai-row-opts">
         <span class="ai-row-hint">トークン: ${aiState.token_saved ? '登録済み' : '未登録'}</span>
@@ -711,8 +847,9 @@ function renderAiList() {
       <div class="ai-row">
         <label class="ai-row-main">
           <input type="checkbox" name="ai-backend" value="${escapeHtml(backend.id)}" ${choice ? 'checked' : ''}>
-          <span class="ai-row-name">${escapeHtml(backend.label)}</span>
+          <span class="ai-row-name">${escapeHtml(backend.label)}${backend.web ? '' : '<span class="ai-row-hint"> web検索なし</span>'}</span>
         </label>
+        ${primaryRadio(backend.id, aiState.primary)}
         <div class="ai-row-opts">
           <select class="ai-select" data-role="model" data-backend="${escapeHtml(backend.id)}" aria-label="モデル">
             ${backend.model_required ? '' : `<option value="" ${model ? '' : 'selected'}>モデル: 相手の既定</option>`}
@@ -733,13 +870,15 @@ function renderAiList() {
 
 async function saveAiSelection() {
   // **チェックした全員を送る。** 0人なら「未選択」= CLIブリッジに戻る
+  const primary = document.querySelector('input[name="ai-primary"]:checked');
   const selections = [...document.querySelectorAll('input[name="ai-backend"]:checked')].map(box => {
     const backend = box.value;
     const value = role => {
       const el = document.querySelector(`select[data-role="${role}"][data-backend="${backend}"]`);
       return el ? el.value : '';
     };
-    return {backend, model: value('model'), effort: value('effort')};
+    return {backend, model: value('model'), effort: value('effort'),
+            primary: !!primary && primary.value === backend};
   });
 
   const note = document.getElementById('ai-note');
@@ -801,12 +940,79 @@ async function saveToken() {
   }
 }
 
-function copyDomain(btn) {
-  navigator.clipboard.writeText(btn.dataset.domain).then(() => {
+// **`navigator.clipboard` は安全なコンテキスト（https か localhost）でしか使えない。**
+// このアプリは LAN の IP に http で開くのが普通なので、その場合 API 自体が存在せず、
+// **押しても何も起きない**（実際そうなっていた）。古い経路（一時的な textarea への
+// 選択 + execCommand）に落として、どちらでもコピーできるようにする。
+// それも駄目なら黙らずに理由を出す —— 押した結果が分からないのが一番困る
+function copyText(btn, text) {
+  const done = () => {
     btn.innerHTML = CHECK_ICON;
     btn.classList.add('copied');
     setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('copied'); }, 1500);
-  });
+  };
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => {
+      if (!legacyCopy(text)) showToast('コピーできませんでした', 'error');
+      else done();
+    });
+    return;
+  }
+  if (legacyCopy(text)) done();
+  else showToast('コピーできませんでした（手で選択してください）', 'error');
+}
+
+// 安全なコンテキストでないときの経路。**画面の外に置いた textarea を選んで実行する**
+// （見えるところに置くと一瞬ちらつく）
+function legacyCopy(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(area);
+  return ok;
+}
+
+function copyDomain(btn) {
+  copyText(btn, btn.dataset.domain);
+}
+
+// 調査結果をまるごとコピーする。**本文は属性に載せない** ——
+// 見出し付きで何行にもなるので、一覧から引く（行の DOM を重くしない）
+function copyResearch(btn) {
+  const item = allDomains.find(d => d.domain === btn.dataset.domain);
+  if (!item || !item.research) return;
+  copyText(btn, item.research);
+}
+
+// 判定を1件つける。**メモは送らない** ——
+// サーバ側が「渡されなければ触らない」ので、AIに聞いた結果や自分で書いたメモが消えない
+async function setVerdict(domain, verdict) {
+  try {
+    const resp = await fetch('/api/review', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({domains: [domain], verdict})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      const item = allDomains.find(d => d.domain === domain);
+      if (item) { item.reviewed = true; item.verdict = verdict; }
+      updateStats();
+      renderDomains();
+      showToast(`${domain} を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
+    } else {
+      showToast('保存できませんでした', 'error');
+    }
+  } catch(e) {
+    showToast('エラーが発生しました', 'error');
+  }
 }
 
 async function unmarkReviewed(domain) {
@@ -819,7 +1025,7 @@ async function unmarkReviewed(domain) {
     const result = await resp.json();
     if (result.success) {
       const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = false; item.note = ''; }
+      if (item) { item.reviewed = false; item.verdict = ''; item.note = ''; }
       updateStats();
       renderDomains();
       showToast(`${domain} を未確認に戻しました`, 'success');
@@ -863,7 +1069,7 @@ async function saveNote(domain, note, successMessage) {
   return false;
 }
 
-async function submitReview() {
+async function submitReview(verdict) {
   if (!pendingDomain) return;
   const domain = pendingDomain;
   const note = document.getElementById('modal-note').value.trim();
@@ -873,15 +1079,15 @@ async function submitReview() {
     const resp = await fetch('/api/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains: [domain], note})
+      body: JSON.stringify({domains: [domain], note, verdict})
     });
     const result = await resp.json();
     if (result.success) {
       const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = true; item.note = note; }
+      if (item) { item.reviewed = true; item.verdict = verdict; item.note = note; }
       updateStats();
       renderDomains();
-      showToast(`${domain} を確認済みにしました`, 'success');
+      showToast(`${domain} を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
     } else {
       showToast('失敗しました', 'error');
     }
@@ -908,9 +1114,18 @@ document.addEventListener('keydown', e => {
 // モデル・考える量をいじったら、その行を選んだものとして扱う（選び直しの手数を減らす）。
 // **一覧はinnerHTMLで差し替えるので、リスナーは入れ物に1回だけ付ける**
 document.getElementById('ai-list').addEventListener('change', e => {
-  if (e.target.tagName !== 'SELECT') return;
-  const box = document.querySelector(`input[name="ai-backend"][value="${e.target.dataset.backend}"]`);
-  if (box) box.checked = true;
+  // モデル・考える量をいじったら、その行を選んだものとして扱う（選び直しの手数を減らす）
+  if (e.target.tagName === 'SELECT') {
+    const box = document.querySelector(`input[name="ai-backend"][value="${e.target.dataset.backend}"]`);
+    if (box) box.checked = true;
+    return;
+  }
+  // **メインに選んだ相手はチェックも立てる。** 立てないと「メインなのに聞く相手に
+  // 入っていない」状態を保存でき、サーバ側で選択から落ちてメインが別の人にずれる
+  if (e.target.name === 'ai-primary') {
+    const box = document.querySelector(`input[name="ai-backend"][value="${e.target.value}"]`);
+    if (box) box.checked = true;
+  }
 });
 
 renderTheme();

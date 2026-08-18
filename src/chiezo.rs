@@ -32,6 +32,10 @@ pub struct Backend {
     /// モデルの指定が必須か。false なら「相手の既定に任せる」を選べる。
     #[serde(default, rename = "model_required")]
     pub model_required: bool,
+    /// web 検索を持っているか。**詳しく調べさせるときに要る** ——
+    /// 持っていない相手に web を頼むと、実行してから断られる。
+    #[serde(default)]
+    pub web: bool,
 }
 
 /// Chiezo が1回の問い合わせで返したもの。
@@ -105,12 +109,15 @@ impl ChiezoClient {
             .collect())
     }
 
-    /// 1 往復投げて本文を受け取る。
+    /// 1 往復投げて本文を受け取る。`web` を立てると相手に web 検索を許す
+    /// (持っていない相手に立てても Chiezo 側が無視する)。
     pub async fn complete(
         &self,
         backend: &str,
         model: Option<&str>,
         effort: Option<&str>,
+        web: bool,
+        timeout: Duration,
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<Completion, String> {
@@ -121,11 +128,12 @@ impl ChiezoClient {
                 // 空は送らない ——「相手の既定に任せる」の意味になる
                 "model": model.filter(|v| !v.is_empty()),
                 "effort": effort.filter(|v| !v.is_empty()),
+                "web": web,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-            })))
+            })).timeout(timeout))
             .await?;
 
         let parsed: CompleteResponse = serde_json::from_str(&body)

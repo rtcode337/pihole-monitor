@@ -91,6 +91,14 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* **`hidden` 属性を作者スタイルより強くする。**
+   ブラウザ既定の `[hidden] { display: none }` は作者スタイルに負けるので、
+   `display` を持つクラス（`.watch-baseline` は `flex`）が付いた要素は
+   `hidden` を付けても出たままになる —— 「JSが出し入れする」作りが静かに壊れる
+   （実際、ブロック済みのタブに監視用の基準日時の欄が出ていた）。
+   個別に `.foo[hidden]` を書いて回るのではなく、ここで一度だけ効かせる */
+[hidden] { display: none !important; }
+
 body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   background: var(--c-bg);
@@ -206,6 +214,30 @@ header h1 span { color: var(--c-text); }
 }
 
 .watch-warn { color: var(--c-amber); }
+
+/* 監視の基準日時。前置きのすぐ下に置く（読んだ流れで直せるように） */
+.watch-baseline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 32px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  color: var(--c-muted);
+}
+
+.watch-baseline input[type="datetime-local"] {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
+.watch-baseline input:focus { outline: none; border-color: var(--c-blue); }
 .watch-qtypes { color: var(--c-dim); }
 
 /* 候補が挙がった理由。**手ごとに色を変える** —— 同じ見た目だと、
@@ -440,6 +472,33 @@ header h1 span { color: var(--c-text); }
   letter-spacing: 0.04em;
 }
 
+/* 判定の2つ。**色で意味を分ける** —— 一覧を流し見したときに、
+   対処が要る行だけは見落としたくない */
+.ok-btn {
+  border: 1px solid var(--c-blue-border);
+  background: transparent;
+  color: var(--c-blue);
+}
+
+.ok-btn:hover { background: var(--c-blue-bg-strong); }
+
+.issue-btn {
+  border: 1px solid var(--c-red-border);
+  background: transparent;
+  color: var(--c-red);
+}
+
+.issue-btn:hover { background: var(--c-red-bg); }
+
+/* 問題ありのバッジ。数字（.stat-value.issue）と同じ赤にそろえる */
+.badge.issue {
+  background: var(--c-red-bg);
+  color: var(--c-red);
+  border: 1px solid var(--c-red-border);
+}
+
+.stat-value.issue { color: var(--c-red); }
+
 .review-btn {
   border: 1px solid var(--c-blue-border);
   background: transparent;
@@ -477,8 +536,11 @@ header h1 span { color: var(--c-text); }
 
 .ai-btn:hover { background: var(--c-amber-bg); }
 
-/* 更新ボタンは .ai-btn が右端を取ったあとに続く */
-.ai-btn + .refresh-btn { margin-left: 0; }
+/* 右端は「相手 → まとめて聞く → 更新」。.ai-btn が右寄せを始めるので、
+   後ろに続く2つは自動マージンを持たない */
+.ai-btn + .refresh-btn,
+.ai-btn + .bulk-btn,
+.bulk-btn + .refresh-btn { margin-left: 0; }
 
 /* 行の「AIに聞く」。押すと1件だけ聞いて、答えがそのままメモになる */
 .ask-ai-btn {
@@ -630,14 +692,40 @@ header h1 span { color: var(--c-text); }
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  min-width: 0;
-  flex: 1;
+  /* **0幅まで潰させない。** `min-width: 0` にすると、同じ行の要素（メインのラジオ・
+     トークン入力）に押されて名前が1文字ずつ縦に折り返す。`.ai-row` は
+     `flex-wrap: wrap` なので、潰れる代わりに次の行へ回ってほしい */
+  min-width: 9rem;
+  flex: 1 1 12rem;
 }
 
 .ai-row-name {
   font-size: 13px;
   color: var(--c-text);
   word-break: break-word;
+}
+
+/* 「詳しく調べる」を頼む1人。チェック（まとめて聞く相手）とは別の軸なので、
+   字でも「メイン」と出して役割の違いを示す */
+.ai-row-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--c-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* まとめて聞く上限の隣に置く「作り直す」チェック */
+.bulk-regen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--c-muted);
+  margin: 0 0 12px 12px;
+  cursor: pointer;
 }
 
 .ai-row-opts {
@@ -869,6 +957,51 @@ header h1 span { color: var(--c-text); }
 
 .detail-note.is-empty { color: var(--c-dim); }
 
+/* 「詳しく調べる」の結果。**メモより上に、メモとは違う見た目で出す** ——
+   人が書いた判断とAIが調べた内容が同じ面に並ぶと、どちらを信じたのか後から分からない */
+.detail-research {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-blue-border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 長いので中でスクロールさせる（モーダルを画面から溢れさせない） */
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+/* 見出しの右端にコピーのボタンを置く行（調査結果の見出し） */
+.detail-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 見出しに添えるいつ調べたか。**見出しと同じ行に小さく置く** */
+.detail-when {
+  margin-left: 8px;
+  color: var(--c-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 調査の実行中。詳細を開いたまま待てるようにする */
+.detail-running {
+  font-size: 11px;
+  color: var(--c-amber);
+  border: 1px dashed var(--c-amber-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
 /* 操作は4つ並ぶので折り返させる —— はみ出させると画面の外に隠れて気づけない */
 #detail-actions { flex-wrap: wrap; }
 
@@ -886,6 +1019,7 @@ header h1 span { color: var(--c-text); }
   .toolbar { padding: 0 14px; }
   .modebar { padding: 0 14px; }
   .watch-context { margin: 0 14px 12px; }
+  .watch-baseline { padding: 0 14px; }
   .select-bar { padding: 0 14px; }
   .domain-list { padding: 0 14px 24px; }
 

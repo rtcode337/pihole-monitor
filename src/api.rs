@@ -38,6 +38,13 @@ pub fn router() -> Router<AppState> {
         // あちらは Pi-hole をその場で叩く集計、こちらは貯めた過去との突き合わせで、
         // 材料も判定も違う(watch.rs)
         .route("/api/watch", get(watch))
+        // 監視の基準日時。**ネットワークの設定を変えた日に押す** ——
+        // 変える前の記録は別の環境のもので、同じ画面に混ぜるとノイズにしかならない
+        .route("/api/watch/baseline", post(watch_baseline))
+        // **1件を詳しく調べる。** `/api/ask` (まとめて短いメモを書かせる) とは
+        // 役割も相手も違う —— こちらはメインの1人だけに、web 検索と観測データを
+        // 渡して深く調べさせる
+        .route("/api/investigate", post(investigate))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -47,15 +54,142 @@ struct DomainEntry {
     domain: String,
     count: u32,
     reviewed: bool,
+    /// `""` = 未確認 / `"issue"` = 問題あり(ブロックされて当然) / `"ok"` = 問題なし(無害だった)
+    verdict: String,
     note: String,
+    /// 「詳しく調べる」の結果。**メモとは別**（詳細画面でメモの上に出す）
+    research: String,
+    researched_at: String,
+}
+
+#[derive(Deserialize)]
+struct BaselineRequest {
+    /// unix秒。**null なら解除**（既定の窓に戻る）
+    #[serde(default)]
+    at: Option<i64>,
+}
+
+/// 監視の基準日時を決める。
+async fn watch_baseline(
+    State(state): State<AppState>,
+    Json(req): Json<BaselineRequest>,
+) -> Response {
+    // **未来は受け付けない。** 受け付けると候補が常に0件になり、
+    // 「静かなのか壊れているのか」が画面から区別できなくなる
+    let now = unix_now() as i64;
+    if req.at.is_some_and(|at| at > now) {
+        return bad_request("基準日時に未来は指定できません");
+    }
+    let value = req.at.map(|at| at.to_string());
+    match state.db.set_setting(crate::watch::BASELINE_KEY, value).await {
+        Ok(()) => Json(json!({ "success": true, "baseline": req.at })).into_response(),
+        Err(e) => internal_error(e, "基準日時を保存できない"),
+    }
+}
+
+#[derive(Deserialize)]
+struct InvestigateRequest {
+    domain: String,
+}
+
+/// 1件のドメインを詳しく調べる。**メインのAI1人**に、web 検索とこちらの観測データを渡す。
+async fn investigate(
+    State(state): State<AppState>,
+    Json(req): Json<InvestigateRequest>,
+) -> Response {
+    let domain = req.domain.trim().to_string();
+    if domain.is_empty() {
+        return bad_request("domain required");
+    }
+
+    // 観測データは**保持期間の窓**から作る(生のクエリが残っている範囲)
+    let now = unix_now();
+    let profile = match state
+        .db
+        .domain_profile(domain.clone(), now - PROFILE_WINDOW_SECS)
+        .await
+    {
+        Ok(profile) => profile,
+        Err(e) => return internal_error(e, "観測データを組み立てられない"),
+    };
+
+    let (author, note) = match state
+        .ai
+        .investigate(&domain, &format_profile(&profile, now))
+        .await
+    {
+        Ok(result) => result,
+        Err(AskError::TokenRequired) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "success": false, "error": "token_required" })),
+            )
+                .into_response();
+        }
+        Err(AskError::Failed(message)) => return bad_gateway(&message),
+    };
+
+    // **メモには書かない。** メモは人が書く（あるいは「まとめてAIに聞く」が書く）もので、
+    // 調査結果で黙って上書きすると、書いた判断が消える。画面は詳細でメモの上に出す
+    if let Err(e) = state
+        .db
+        .save_research(domain.clone(), note.clone())
+        .await
+    {
+        return internal_error(e, "調査結果を保存できない");
+    }
+
+    Json(json!({
+        "success": true,
+        "domain": domain,
+        "research": note,
+        "researched_at": chrono::Local::now().to_rfc3339(),
+        "author": author,
+    }))
+    .into_response()
+}
+
+/// 観測データを渡す窓。**生のクエリが残っている範囲**(保持期間)より長くしても中身は増えない。
+const PROFILE_WINDOW_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
+/// 観測データを AI に渡す文面へ整える。**数字はそのまま渡す** ——
+/// こちらで「怪しい」と解釈してから渡すと、その解釈ごと信じた答えが返ってくる。
+fn format_profile(p: &crate::db::DomainProfile, now: f64) -> String {
+    fn counts(label: &str, rows: &[(String, i64)]) -> String {
+        if rows.is_empty() {
+            return String::new();
+        }
+        let body = rows
+            .iter()
+            .map(|(k, n)| format!("{}={}", if k.is_empty() { "不明" } else { k }, n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("- {label}: {body}
+")
+    }
+
+    let mut out = String::new();
+    if let Some(first) = p.first_seen {
+        let days = ((now - first as f64) / 86_400.0).floor() as i64;
+        out.push_str(&format!("- はじめて観測した日: 約{days}日前
+"));
+    }
+    out.push_str(&format!("- 記録開始からの総問い合わせ回数: {}
+", p.total));
+    out.push_str(&counts("問い合わせた端末(直近7日)", &p.clients));
+    out.push_str(&counts("Pi-holeの処理結果(直近7日)", &p.statuses));
+    out.push_str(&counts("応答の種類(直近7日)", &p.replies));
+    out.push_str(&counts("クエリ種別(直近7日)", &p.qtypes));
+    out.push_str(
+        "
+補足: 処理結果の GRAVITY と SPECIAL_DOMAIN はPi-holeがブロックしたことを、         FORWARDED と CACHE は通したことを意味します。",
+    );
+    out
 }
 
 /// 「ブロックされていない怪しい通信」の候補。判定は watch.rs、材料は取り込んだ蓄積。
 async fn watch(State(state): State<AppState>) -> Response {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
+    let now = unix_now();
     match crate::watch::candidates(&state.db, now).await {
         Ok(result) => Json(result).into_response(),
         Err(e) => {
@@ -76,6 +210,12 @@ async fn watch(State(state): State<AppState>) -> Response {
 struct ReviewRequest {
     #[serde(default)]
     domains: Vec<String>,
+    /// 判定。**そのドメイン自身が問題のある通信か**を記録する。
+    /// `"issue"` = 問題あり(広告・トラッカー等。ブロックされて当然) /
+    /// `"ok"` = 問題なし(怪しい候補として挙がったが無害だった)。
+    /// **省略は `"ok"`** —— 画面は必ず送るので、これは直に POST されたときの保険。
+    #[serde(default)]
+    verdict: String,
     /// **省略したらメモは触らない。** 一括で確認済みにするときに、
     /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
     note: Option<String>,
@@ -115,7 +255,10 @@ async fn domains(State(state): State<AppState>) -> Response {
                 domain: domain.clone(),
                 count: *count,
                 reviewed: record.is_some_and(|r| r.reviewed),
+                verdict: record.map(|r| r.verdict.clone()).unwrap_or_default(),
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
+                research: record.map(|r| r.research.clone()).unwrap_or_default(),
+                researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
             }
         })
         .collect();
@@ -128,7 +271,10 @@ async fn domains(State(state): State<AppState>) -> Response {
                 domain: domain.clone(),
                 count: 0,
                 reviewed: record.reviewed,
+                verdict: record.verdict.clone(),
                 note: record.note.clone(),
+                research: record.research.clone(),
+                researched_at: record.researched_at.clone(),
             });
         }
     }
@@ -152,7 +298,18 @@ async fn review_post(State(state): State<AppState>, Json(req): Json<ReviewReques
         return bad_request("domains required");
     }
     let count = domains.len();
-    match state.db.set_reviewed(domains, true, req.note).await {
+    // **知らない値は受け付けない。** 直に POST された値で、絞り込みのどこにも
+    // 出てこない行を作らせない
+    let verdict = match req.verdict.trim() {
+        "" | "ok" => "ok",
+        "issue" => "issue",
+        _ => return bad_request("verdict は ok か issue"),
+    };
+    match state
+        .db
+        .set_reviewed(domains, true, Some(verdict.to_string()), req.note)
+        .await
+    {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "確認済みにできない"),
     }
@@ -165,7 +322,7 @@ async fn review_delete(State(state): State<AppState>, Json(req): Json<ReviewRequ
         return bad_request("domains required");
     }
     let count = domains.len();
-    match state.db.set_reviewed(domains, false, None).await {
+    match state.db.set_reviewed(domains, false, None, None).await {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "未確認に戻せない"),
     }
@@ -272,6 +429,8 @@ async fn ai_get(State(state): State<AppState>) -> Response {
         "token_saved": state.ai.has_token(),
         "backends": backends,
         "selections": state.ai.selections().await,
+        // **メインの1人**(「詳しく調べる」の宛先)。画面のラジオを立てるのに使う
+        "primary": state.ai.primary_backend().await,
         // 実際に聞く相手の名前(**空にならない** —— 未選択ならCLIブリッジ)
         "current": state.ai.current_names().await,
         "error": error,
@@ -294,6 +453,10 @@ struct SelectEntry {
     model: String,
     #[serde(default)]
     effort: String,
+    /// 「詳しく調べる」を頼む1人。**複数立っていても先頭だけを採る**
+    /// (画面はラジオなので普通は1人だが、直に POST されたら分からない)。
+    #[serde(default)]
+    primary: bool,
 }
 
 /// 聞く相手を保存する。**実在しない相手は受け付けない** ——
@@ -358,17 +521,44 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
             label: backend.label.clone(),
             model: (!model.is_empty()).then_some(model),
             effort: (!effort.is_empty()).then_some(effort),
+            primary: entry.primary,
         });
     }
 
+    // **メインは必ず1人にする。** 誰も立っていなければ先頭を立てる ——
+    // 立っていないと「詳しく調べる」が誰に行くのか画面から読めない。
+    // 複数立っていたら先頭だけ残す(直に POST された値を信じない)
+    let mut seen_primary = false;
+    for choice in choices.iter_mut() {
+        if choice.primary && !seen_primary {
+            seen_primary = true;
+        } else {
+            choice.primary = false;
+        }
+    }
+    if !seen_primary {
+        if let Some(first) = choices.first_mut() {
+            first.primary = true;
+        }
+    }
+
     match state.ai.select(&choices).await {
+        // **保存したあとに読み直す。** 実際に聞く並び(メインが先頭)で返さないと、
+        // 保存直後のトーストだけ画面のボタンと違う順で出る
         Ok(()) => Json(json!({
             "success": true,
-            "current": choices.iter().map(AiChoice::display_name).collect::<Vec<_>>(),
+            "current": state.ai.current_names().await,
         }))
         .into_response(),
         Err(e) => internal_error(e, "AIの選択を保存できない"),
     }
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// 空白を落として重複を除く。**順番は保つ** ——

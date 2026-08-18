@@ -39,6 +39,7 @@
     <div class="stat-label">未確認</div>
   </div>
   <div class="stat">
+    <!-- 仕分けが済んだ件数（問題あり + 問題なし）。内訳は絞り込みで見る -->
     <div class="stat-value ok" id="stat-reviewed">-</div>
     <div class="stat-label">確認済み</div>
   </div>
@@ -59,14 +60,26 @@
      貯まっていない時期に「0件」と出ると、平穏なのか材料が無いのか区別できない -->
 <div class="watch-context" id="watch-context" hidden></div>
 
+<!-- 監視の基準日時。**ネットワークの設定を変えた日に押す** ——
+     変える前の通信は別の環境の記録で、同じ画面に混ぜるとノイズにしかならない -->
+<div class="watch-baseline" id="watch-baseline" hidden>
+  <label for="baseline-at">この日時より後だけを見る</label>
+  <input type="datetime-local" id="baseline-at">
+  <button class="action-btn review-btn" onclick="saveBaseline()">保存</button>
+  <button class="action-btn ok-btn" onclick="saveBaseline(true)" title="いまを基準にする（ネットワークの設定を変えた直後に押す）">いまに合わせる</button>
+  <button class="action-btn cancel-btn" onclick="clearBaseline()" title="既定の窓（直近24時間）に戻す">解除</button>
+</div>
+
 <div class="toolbar">
-  <button class="filter-btn active" onclick="setFilter('new', event)">未確認のみ</button>
-  <button class="filter-btn" onclick="setFilter('reviewed', event)">確認済みのみ</button>
+  <button class="filter-btn active" onclick="setFilter('new', event)">未確認</button>
+  <button class="filter-btn" onclick="setFilter('issue', event)">問題あり</button>
+  <button class="filter-btn" onclick="setFilter('ok', event)">問題なし</button>
   <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
   <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
-       押す前に知りたいので、名前を隠して歯車だけにはしない -->
-  <button class="bulk-btn" onclick="openBulkModal()" title="いま一覧に出ているドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
+       押す前に知りたいので、名前を隠して歯車だけにはしない。
+       **右端の3つは「相手 → まとめて聞く → 更新」の順**（設定 → 実行 → 読み直し） -->
   <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
+  <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
 
@@ -78,7 +91,8 @@
     表示中を全選択
   </label>
   <span class="select-count" id="select-count">0 件選択</span>
-  <button class="action-btn confirm-btn" id="select-review-btn" onclick="reviewSelected()" disabled>選択を確認済みにする</button>
+  <button class="action-btn ok-btn" id="select-review-btn" onclick="reviewSelected('ok')" disabled>選択を問題なしに</button>
+  <button class="action-btn issue-btn" id="select-issue-btn" onclick="reviewSelected('issue')" disabled>選択を問題ありに</button>
   <button class="action-btn cancel-btn" id="select-clear-btn" onclick="clearSelection()" disabled>選択を解除</button>
 </div>
 
@@ -95,10 +109,11 @@
     <textarea id="modal-note" class="modal-note" placeholder="メモ（確認済みにしなくても残せます）"></textarea>
     <div class="modal-actions">
       <button class="action-btn cancel-btn" onclick="closeModal()">キャンセル</button>
-      <!-- メモだけ残すのと、確認済みにするのは別の操作。
-           確認済みのドメインには「確認済みにする」を出さない（app.js が隠す） -->
+      <!-- メモだけ残すのと、判定を付けるのは別の操作。
+           判定済みのドメインには判定のボタンを出さない（app.js が隠す） -->
       <button class="action-btn review-btn" onclick="submitNote()">メモを保存</button>
-      <button class="action-btn confirm-btn" id="modal-review-btn" onclick="submitReview()">確認済みにする</button>
+      <button class="action-btn ok-btn" id="modal-review-btn" onclick="submitReview('ok')" title="怪しく見えたが無害だった">保存して問題なし</button>
+      <button class="action-btn issue-btn" id="modal-issue-btn" onclick="submitReview('issue')" title="問題のある通信だった（ブロックされて当然）">保存して問題あり</button>
     </div>
   </div>
 </div>
@@ -125,6 +140,12 @@
       1回に聞く上限
       <input type="number" id="bulk-limit" min="1" max="500" step="1" onchange="saveBulkLimit(this)">
       件
+    </label>
+    <!-- **既定は「空いているところを埋める」。** メモがあるものまで毎回聞き直すと、
+         同じ答えを取り直すために枠と時間を使う。作り直しは明示したときだけ -->
+    <label class="bulk-regen">
+      <input type="checkbox" id="bulk-regenerate" onchange="openBulkModal()">
+      すでにメモがあるものも作り直す
     </label>
     <div class="bulk-log" id="bulk-log"></div>
     <div class="modal-actions">

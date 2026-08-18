@@ -20,7 +20,40 @@ use rusqlite::{Connection, OptionalExtension};
 #[derive(Debug, Clone, Default)]
 pub struct DomainRecord {
     pub note: String,
+    /// 何らかの判定を下したか(`verdict` が空でない)。**判定の中身とは別に持つ** ——
+    /// 「見た」と「どちらだったか」は違う問いで、一覧の絞り込みは前者を使う場面がある。
     pub reviewed: bool,
+    /// 判定。**そのドメイン自身が問題のある通信かどうか**を記録する。
+    ///
+    /// - `""` = 未確認
+    /// - `"issue"` = 問題あり（広告・トラッカー・不要なテレメトリ等。**ブロックされて当然**）
+    /// - `"ok"` = 問題なし（**怪しい候補として挙がったが、調べたら無害だった**）
+    ///
+    /// **「確認した」を1つの状態にしない。** 一覧に並ぶものは「ブロックが妥当だったもの」と
+    /// 「怪しく見えただけのもの」が混ざっていて、そこを見分けられないと、
+    /// あとから見返したときに**何が誤検知だったのかが分からなくなる**。
+    pub verdict: String,
+    /// 「詳しく調べる」の結果。**メモとは別に持つ** ——
+    /// メモは人が書く（あるいは「まとめてAIに聞く」が書く）ものなので、
+    /// 調査結果で黙って上書きすると、書いた判断が消える。
+    /// 画面では詳細のメモの**上**に出す。
+    pub research: String,
+    /// 調べた日時（ISO8601）。**いつの調査かが分からないと鵜呑みにできない**。
+    pub researched_at: String,
+}
+
+/// 1つのドメインについてこちらが観測した事実(「詳しく調べる」でAIに渡す材料)。
+#[derive(Debug, Clone, Default)]
+pub struct DomainProfile {
+    pub first_seen: Option<i64>,
+    pub last_seen: Option<i64>,
+    /// 記録し始めてからの総問い合わせ回数(遡り取り込みぶんを含む)
+    pub total: i64,
+    /// 以下はいずれも**保持期間の窓の中**(生のクエリが残っている範囲)
+    pub clients: Vec<(String, i64)>,
+    pub statuses: Vec<(String, i64)>,
+    pub replies: Vec<(String, i64)>,
+    pub qtypes: Vec<(String, i64)>,
 }
 
 /// 取り込みの状況(件数と、生のクエリの一番古い時刻)。
@@ -69,10 +102,13 @@ impl Db {
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS domain_notes (
-                 domain     TEXT PRIMARY KEY,
-                 updated_at TEXT NOT NULL,
-                 note       TEXT,
-                 reviewed   INTEGER NOT NULL DEFAULT 0
+                 domain        TEXT PRIMARY KEY,
+                 updated_at    TEXT NOT NULL,
+                 note          TEXT,
+                 reviewed      INTEGER NOT NULL DEFAULT 0,
+                 verdict       TEXT NOT NULL DEFAULT '',
+                 research      TEXT,
+                 researched_at TEXT
              )",
         )
         .context("domain_notesテーブルを作成できない")?;
@@ -145,16 +181,24 @@ impl Db {
     /// ドメイン → 記録(メモ・確認済み)の対応を全件返す。
     pub async fn records(&self) -> Result<HashMap<String, DomainRecord>> {
         self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT domain, note, reviewed FROM domain_notes")?;
+            let mut stmt = conn.prepare(
+                "SELECT domain, note, reviewed, verdict, research, researched_at FROM domain_notes",
+            )?;
             let rows = stmt.query_map([], |row| {
                 let domain: String = row.get(0)?;
                 let note: Option<String> = row.get(1)?;
                 let reviewed: i64 = row.get(2)?;
+                let verdict: Option<String> = row.get(3)?;
+                let research: Option<String> = row.get(4)?;
+                let researched_at: Option<String> = row.get(5)?;
                 Ok((
                     domain,
                     DomainRecord {
                         note: note.unwrap_or_default(),
                         reviewed: reviewed != 0,
+                        verdict: verdict.unwrap_or_default(),
+                        research: research.unwrap_or_default(),
+                        researched_at: researched_at.unwrap_or_default(),
                     },
                 ))
             })?;
@@ -175,12 +219,19 @@ impl Db {
         &self,
         domains: Vec<String>,
         reviewed: bool,
+        verdict: Option<String>,
         note: Option<String>,
     ) -> Result<()> {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
+            // 未確認に戻すときは判定も落とす(「確認していないのに問題なし」を残さない)
+            let verdict = if reviewed {
+                verdict
+            } else {
+                Some(String::new())
+            };
             for domain in &domains {
-                upsert(&tx, domain, note.as_deref(), Some(reviewed))?;
+                upsert(&tx, domain, note.as_deref(), Some(reviewed), verdict.as_deref())?;
                 if !reviewed {
                     cleanup(&tx, domain)?;
                 }
@@ -194,7 +245,7 @@ impl Db {
     /// メモだけ保存する(確認済みかどうかは変えない)。
     pub async fn save_note(&self, domain: String, note: String) -> Result<()> {
         self.with_conn(move |conn| {
-            upsert(conn, &domain, Some(&note), None)?;
+            upsert(conn, &domain, Some(&note), None, None)?;
             cleanup(conn, &domain)?;
             Ok(())
         })
@@ -207,10 +258,28 @@ impl Db {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
             for (domain, note) in &notes {
-                upsert(&tx, domain, Some(note), None)?;
+                upsert(&tx, domain, Some(note), None, None)?;
                 cleanup(&tx, domain)?;
             }
             tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 「詳しく調べる」の結果を保存する。**メモには触らない**
+    /// （人が書いた判断を調査結果で上書きしないため）。
+    pub async fn save_research(&self, domain: String, research: String) -> Result<()> {
+        self.with_conn(move |conn| {
+            let now = chrono::Local::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO domain_notes (domain, updated_at, note, reviewed, research, researched_at)
+                 VALUES (?1, ?2, '', 0, ?3, ?2)
+                 ON CONFLICT(domain) DO UPDATE SET
+                     research      = excluded.research,
+                     researched_at = excluded.researched_at",
+                rusqlite::params![domain, now, research],
+            )?;
             Ok(())
         })
         .await
@@ -536,7 +605,55 @@ impl Db {
         .await
     }
 
-    /// 取り込みの状況(画面と起動ログに出す)。
+    /// 1つのドメインについて、こちらが観測した事実をまとめて返す。
+    ///
+    /// **「詳しく調べる」でAIに渡す材料。** そのドメインが何かは web でも分かるが、
+    /// **このネットワークでどう振る舞っているか**はこちらしか知らない。
+    /// 両方を突き合わせて初めて「放っておいてよいか」が言える。
+    pub async fn domain_profile(&self, domain: String, since: f64) -> Result<DomainProfile> {
+        self.with_conn(move |conn| {
+            let seen: Option<(i64, i64, i64)> = conn
+                .query_row(
+                    "SELECT first_seen, last_seen, total FROM dns_domains WHERE domain = ?1",
+                    [&domain],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+
+            let mut grouped = |sql: &str| -> rusqlite::Result<Vec<(String, i64)>> {
+                let mut stmt = conn.prepare(sql)?;
+                let rows = stmt.query_map(rusqlite::params![&domain, since], |r| {
+                    Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get(1)?))
+                })?;
+                rows.collect()
+            };
+
+            Ok(DomainProfile {
+                first_seen: seen.map(|s| s.0),
+                last_seen: seen.map(|s| s.1),
+                total: seen.map(|s| s.2).unwrap_or(0),
+                clients: grouped(
+                    "SELECT client, COUNT(*) n FROM dns_queries
+                      WHERE domain = ?1 AND ts >= ?2 GROUP BY client ORDER BY n DESC",
+                )?,
+                statuses: grouped(
+                    "SELECT status, COUNT(*) n FROM dns_queries
+                      WHERE domain = ?1 AND ts >= ?2 GROUP BY status ORDER BY n DESC",
+                )?,
+                replies: grouped(
+                    "SELECT reply, COUNT(*) n FROM dns_queries
+                      WHERE domain = ?1 AND ts >= ?2 GROUP BY reply ORDER BY n DESC",
+                )?,
+                qtypes: grouped(
+                    "SELECT qtype, COUNT(*) n FROM dns_queries
+                      WHERE domain = ?1 AND ts >= ?2 GROUP BY qtype ORDER BY n DESC",
+                )?,
+            })
+        })
+        .await
+    }
+
+    /// 取り込みの状況(画面と表示に出す)。
     pub async fn ingest_stats(&self) -> Result<IngestStats> {
         self.with_conn(|conn| {
             let queries: i64 =
@@ -577,16 +694,18 @@ fn upsert(
     domain: &str,
     note: Option<&str>,
     reviewed: Option<bool>,
+    verdict: Option<&str>,
 ) -> rusqlite::Result<()> {
     let updated_at = chrono::Local::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO domain_notes (domain, updated_at, note, reviewed)
-         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0))
+        "INSERT INTO domain_notes (domain, updated_at, note, reviewed, verdict)
+         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0), COALESCE(?5, ''))
          ON CONFLICT(domain) DO UPDATE SET
              updated_at = excluded.updated_at,
              note       = COALESCE(?3, domain_notes.note),
-             reviewed   = COALESCE(?4, domain_notes.reviewed)",
-        rusqlite::params![domain, updated_at, note, reviewed],
+             reviewed   = COALESCE(?4, domain_notes.reviewed),
+             verdict    = COALESCE(?5, domain_notes.verdict)",
+        rusqlite::params![domain, updated_at, note, reviewed, verdict],
     )?;
     Ok(())
 }
@@ -594,9 +713,12 @@ fn upsert(
 /// 何も持たなくなった行を消す(未確認 + メモ空)。
 /// 残しても害は無いが、`/api/domains` が件数0の行として一覧に足してしまう。
 fn cleanup(conn: &Connection, domain: &str) -> rusqlite::Result<()> {
+    // **調査結果が入っている行は消さない。** メモが空でも、30秒かけて調べた結果は
+    // 残しておきたい（消すと押し直すまで戻らない）
     conn.execute(
         "DELETE FROM domain_notes
-         WHERE domain = ?1 AND reviewed = 0 AND COALESCE(TRIM(note), '') = ''",
+         WHERE domain = ?1 AND reviewed = 0
+           AND COALESCE(TRIM(note), '') = '' AND COALESCE(TRIM(research), '') = ''",
         [domain],
     )?;
     Ok(())
@@ -634,6 +756,32 @@ fn migrate(conn: &Connection) -> Result<()> {
         )
         .context("reviewed列を追加できない")?;
         tracing::info!("domain_notes に reviewed 列を追加した(既存行は確認済みとして扱う)");
+    }
+
+    // 判定(問題あり/問題なし)。**既存の確認済みは `ok` に倒している。**
+    //
+    // **この移行は意味の取り違えを含む。** 列を足した時点では「確認して納得した = 問題なし」と
+    // 読んでいたが、正しくは**ドメイン自身が問題のある通信かどうか**で、
+    // 広告・トラッカーの類は `issue`(ブロックされて当然)にあたる。
+    // 移行済みのデータは個人の手元の記録なので画面から付け直せばよく、
+    // **移行の規則は変えていない**(いま変えると、正しく付け直した `ok` まで巻き戻る)。
+    // 判定を持たない「確認済み」を残さないという狙い自体は今も同じ
+    if table_exists(conn, "domain_notes")? && !column_exists(conn, "domain_notes", "verdict")? {
+        conn.execute_batch(
+            "ALTER TABLE domain_notes ADD COLUMN verdict TEXT NOT NULL DEFAULT '';
+             UPDATE domain_notes SET verdict = 'ok' WHERE reviewed = 1;",
+        )
+        .context("verdict列を追加できない")?;
+        tracing::info!("domain_notes に verdict 列を追加した(既存の確認済みは ok として扱う。画面から付け直せる)");
+    }
+
+    // 「詳しく調べる」の結果はメモと別に持つ（この列より前のDBには無い）
+    for column in ["research", "researched_at"] {
+        if !column_exists(conn, "domain_notes", column)? {
+            conn.execute_batch(&format!("ALTER TABLE domain_notes ADD COLUMN {column} TEXT"))
+                .with_context(|| format!("{column}列を追加できない"))?;
+            tracing::info!(column, "domain_notes に列を追加した");
+        }
     }
 
     Ok(())
