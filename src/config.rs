@@ -33,6 +33,13 @@ pub const AUTH_ERROR_KEYWORDS: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct Config {
     pub pihole_base_url: String,
+    /// Pi-hole の**管理画面**の URL(末尾の `/` は落とす)。理由の札から、その通信だけを
+    /// 絞り込んだクエリログ(`/admin/queries.lp?...`)へ飛ばすのに使う。
+    ///
+    /// **API の URL とは別に持てる。** リンクを開くのは**ブラウザ**なので、
+    /// コンテナの中からしか引けない名前(`http://pihole:80`)のままだと LAN の端末では開けない。
+    /// 未設定なら `pihole_base_url` をそのまま使う(同じホストなら追加設定は要らない)。
+    pub pihole_web_url: String,
     pub pihole_password: String,
     /// 取得するブロッククエリの件数。-1で全件(Pi-hole v6 APIの `length` パラメータ)
     pub pihole_query_limit: i64,
@@ -80,10 +87,19 @@ impl Config {
             _ => data_dir.join("state"),
         };
 
+        let pihole_base_url = env_string("PIHOLE_BASE_URL", "http://pihole:80")
+            .trim_end_matches('/')
+            .to_string();
+        // 管理画面の URL。未設定なら API と同じ URL に倒す ——
+        // 同じホストで動かしている環境(ほとんどがそう)では設定を増やさずに済む
+        let pihole_web_url = match env_string("PIHOLE_WEB_URL", "") {
+            raw if !raw.trim().is_empty() => raw.trim().trim_end_matches('/').to_string(),
+            _ => pihole_base_url.clone(),
+        };
+
         Self {
-            pihole_base_url: env_string("PIHOLE_BASE_URL", "http://pihole:80")
-                .trim_end_matches('/')
-                .to_string(),
+            pihole_base_url,
+            pihole_web_url,
             pihole_password: env_string("PIHOLE_PASSWORD", ""),
             pihole_query_limit: env_parse("PIHOLE_QUERY_LIMIT", -1),
             claude_timeout: Duration::from_secs(env_parse("CLAUDE_TIMEOUT", 60)),

@@ -7,7 +7,7 @@
 //! **判定はコードでやり、AIには渡さない。** 候補を絞ってから「これは何か」を聞くのが
 //! 既存の「AIに聞く」で、全ドメインを投げると枠を使い切るだけで精度も上がらない。
 //!
-//! いまの手は3つ。**どれも「いつもと違う」の言い換え**なので、比較対象(ingest.rs が
+//! いまの手は5つ。**どれも「いつもと違う」の言い換え**なので、比較対象(ingest.rs が
 //! 貯めた過去)が無いと成立しない。
 //!
 //! | 手 | 何を捕まえるか | 誤検知の出方 |
@@ -15,6 +15,15 @@
 //! | 初出 | 新しいトラッカー、入り込んだ直後の通信 | CDNの新しいシャード |
 //! | NXDOMAIN多発 | 生成ドメイン(DGA)、死んだ接続先、設定ミス | 名前解決の設定ミス |
 //! | 珍しいクエリ種別 | DNSトンネリング | 新しい機器の正常な動作 |
+//! | 周期(ビーコン) | C2、常時テレメトリ | ルーターの死活確認・更新確認 |
+//! | ラベルの形 | DNSトンネリング、DGA | CDN・クラウドのホスト名 |
+//!
+//! **しきい値の説明は [`methods`] がコードから組み立てて画面へ返す。**
+//! 散文で別に書くと、定数をいじったときに説明だけが古くなる。
+//!
+//! 各理由には [`QueryFilter`](Reason::filter) が付いていて、画面はそれを
+//! Pi-hole のクエリログ(`/admin/queries.lp`)の絞り込みリンクにする ——
+//! **「本当にそうなっているか」は元の通信を見るのが一番早い**。
 
 use std::collections::HashMap;
 
@@ -108,6 +117,143 @@ pub struct Reason {
     pub kind: &'static str,
     /// 人が読む説明
     pub detail: String,
+    /// この理由の元になった通信を Pi-hole 側で絞り込むための条件。
+    /// **画面はこれをそのままクエリログのリンクにする**(下記 [`QueryFilter`])。
+    pub filter: QueryFilter,
+}
+
+/// Pi-hole のクエリログを絞り込む条件。
+///
+/// **フィールド名は Pi-hole の GET パラメータ名そのまま**(`domain` / `client_ip` /
+/// `type` / `reply`)。画面はキーと値を URL エンコードして並べるだけでよく、
+/// **「どう絞り込むか」の知識はこちら側に閉じる** —— 手ごとに違う条件
+/// (種別なら `type`、NXDOMAIN なら `reply`)を画面に散らかさないため。
+///
+/// ドメインは `*` を使える(`/api/queries` の仕様。親でまとめた
+/// 「ラベルの形」だけは `*.親` で引く —— 親そのものは引かれていないことが多い)。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct QueryFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub qtype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+impl QueryFilter {
+    fn domain(domain: &str) -> Self {
+        Self {
+            domain: Some(domain.to_string()),
+            ..Self::default()
+        }
+    }
+
+    fn client(mut self, client: &str) -> Self {
+        self.client_ip = Some(client.to_string());
+        self
+    }
+
+    fn qtype(mut self, qtype: &str) -> Self {
+        self.qtype = Some(qtype.to_string());
+        self
+    }
+
+    fn reply(mut self, reply: &str) -> Self {
+        self.reply = Some(reply.to_string());
+        self
+    }
+}
+
+/// 候補の選び方1つぶんの説明。**画面に出す文をコードから作る** ——
+/// しきい値を散文で別に書くと、定数をいじったときに説明だけが古くなる
+/// (「なぜ挙がったか」が読めない一覧は結局無視される、と同じ理由で、
+/// 「どう選んでいるか」が古い一覧も信用されない)。
+#[derive(Debug, Clone, Serialize)]
+pub struct Method {
+    /// [`Reason::kind`] と同じ印(画面が理由の札と同じ色を当てる)
+    pub kind: &'static str,
+    pub label: &'static str,
+    /// 何を捕まえたいか
+    pub catches: &'static str,
+    /// どう判定しているか(しきい値つき)
+    pub how: String,
+    /// 見える範囲・誤検知の出方。**「静かなのか、材料が無いのか」を読み分けさせる**
+    pub caveat: String,
+}
+
+/// 手の一覧を、いまのしきい値そのままで組み立てる。
+fn methods(backfill_days: i64) -> Vec<Method> {
+    vec![
+        Method {
+            kind: "first_seen",
+            label: "初出",
+            catches: "新しいトラッカー、入り込んだ直後の通信",
+            how: "日ごとのドメイン集計(過去ぶんも遡って埋めてある)を見て、\
+                  はじめて見た日がいま見ている範囲の中にあるものを挙げる"
+                .to_string(),
+            caveat: format!(
+                "遡って埋めてあるのは{backfill_days}日ぶんなので、それより前に出ていた\
+                 ドメインも「初出」に見えることがある。CDNがシャードを増やしただけのこともある"
+            ),
+        },
+        Method {
+            kind: "nxdomain",
+            label: "NXDOMAIN多発",
+            catches: "生成ドメイン(DGA)、死んだ接続先、設定ミス",
+            how: format!("存在しない名前として{NXDOMAIN_MIN}回以上返っている"),
+            caveat: "逆引き(*.in-addr.arpa / *.ip6.arpa)は必ずNXDOMAINになるので除いてある。\
+                     生のクエリが残っている範囲でしか見えない"
+                .to_string(),
+        },
+        Method {
+            kind: "rare_qtype",
+            label: "珍しいクエリ種別",
+            catches: "DNSトンネリング(TXT・NULL・ANY を大量に使う)",
+            how: format!(
+                "平常の種別({})に無いものを{RARE_QTYPE_MIN}回以上引いている",
+                COMMON_QTYPES.join(" / ")
+            ),
+            caveat: "新しい機器が正常な動作で珍しい種別を引くこともある。\
+                     生のクエリが残っている範囲でしか見えない"
+                .to_string(),
+        },
+        Method {
+            kind: "beacon",
+            label: "周期(ビーコン)",
+            catches: "C2との定時通信、常時動いているテレメトリ",
+            how: format!(
+                "同じ端末が同じドメインを{}回以上引いていて、間隔のばらつき\
+                 (標準偏差÷中央値)が{BEACON_MAX_CV}以下。端末ごとに分けて数える\
+                 (混ぜると間隔が乱れて周期が消える)。間隔の中央値が{}秒未満のものと、\
+                 {}秒以内に続けて飛ぶA/AAAA/HTTPSは数えない",
+                BEACON_MIN_INTERVALS + 1,
+                BEACON_MIN_MEDIAN_SECS as i64,
+                BEACON_SAME_SHOT_SECS as i64,
+            ),
+            caveat: "ルーターの死活確認・NASの更新確認・テレメトリなど、\
+                     正常でも規則正しく鳴るものは多い(実測: 61秒・80秒・10分・29分)。\
+                     生のクエリが残っている範囲でしか見えない"
+                .to_string(),
+        },
+        Method {
+            kind: "label_shape",
+            label: "ラベルの形",
+            catches: "DNSトンネリング、DGA",
+            how: format!(
+                "1つの親({LABEL_PARENT_DEPTH}ラベル)の下に、{LABEL_LONG}文字以上で\
+                 1文字あたりの情報量が{LABEL_ENTROPY}ビット以上の名前が{LABEL_MIN_DISTINCT}種類以上あり、\
+                 ちがう名前の数÷問い合わせ回数が{LABEL_MIN_UNIQUE_RATIO}以上(＝毎回ちがう名前を引いている)"
+            ),
+            caveat: "長くて出鱈目な名前はCDNとクラウドも大量に使う(実測で105個の親が\
+                     引っかかり、そのすべてが正常だった)。分かれ目は最後の比 ——\
+                     CDNは同じ名前を何度も引くので比が小さくなる。\
+                     この比には生のクエリの件数が要るので、窓が埋まるまでは何も挙がらない"
+                .to_string(),
+        },
+    ]
 }
 
 /// 怪しい通信の候補1件。
@@ -145,6 +291,9 @@ pub struct WatchResult {
     pub baseline: Option<i64>,
     /// 実際に見はじめる時刻(unix秒)。基準日時が古すぎるときは丸めた後の値
     pub since: i64,
+    /// 見ている範囲の終わり(unix秒 = いま)。**画面が持つ時刻を使わない** ——
+    /// 理由のリンクに載せる範囲は、判定に使った範囲とそろっている必要がある
+    pub until: i64,
     /// 基準日時が遡り取り込みの範囲より古くて丸めたか。
     /// **丸めたことは画面に出す** —— 黙って狭めると「設定した日から見ているつもり」で
     /// 実際は違う、という食い違いが起きる
@@ -154,11 +303,16 @@ pub struct WatchResult {
     pub total_domains: i64,
     /// この窓で観測したクエリ種別と件数(平常の形。画面に出して判断材料にする)
     pub qtypes: Vec<(String, i64)>,
+    /// 候補の選び方(しきい値つき)。画面の「どうやって候補を選んでいるか」に出す
+    pub methods: Vec<Method>,
+    /// Pi-hole の管理画面の URL。**理由の札のリンクを組むのに使う**
+    /// (空なら画面はリンクにしない)
+    pub pihole_url: String,
     pub items: Vec<WatchItem>,
 }
 
 /// 候補を組み立てる。
-pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
+pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResult> {
     let backfill_days = db.backfilled_days().await?;
     let stats = db.ingest_stats().await?;
 
@@ -182,17 +336,21 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
     // ① 初出
     for (domain, seen, _total) in db.first_seen_since(since_secs).await? {
         first_seen.insert(domain.clone(), seen);
+        let filter = QueryFilter::domain(&domain);
         reasons.entry(domain).or_default().push(Reason {
             kind: "first_seen",
             detail: format!("{}にはじめて見た", ago(now - seen as f64)),
+            filter,
         });
     }
 
     // ② NXDOMAIN多発
     for (domain, n) in db.nxdomain_since(since_ts, NXDOMAIN_MIN).await? {
+        let filter = QueryFilter::domain(&domain).reply("NXDOMAIN");
         reasons.entry(domain).or_default().push(Reason {
             kind: "nxdomain",
             detail: format!("存在しない名前として{n}回返っている"),
+            filter,
         });
     }
 
@@ -207,14 +365,17 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
         if n < RARE_QTYPE_MIN {
             continue;
         }
+        let filter = QueryFilter::domain(&domain).qtype(&qtype);
         reasons.entry(domain).or_default().push(Reason {
             kind: "rare_qtype",
             detail: format!("珍しい種別 {qtype} を{n}回引いている"),
+            filter,
         });
     }
 
     // ④ 周期(ビーコン)
     for b in beacons(db.timeline_since(since_ts).await?) {
+        let filter = QueryFilter::domain(&b.domain).client(&b.client);
         reasons.entry(b.domain).or_default().push(Reason {
             kind: "beacon",
             detail: format!(
@@ -223,17 +384,21 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
                 interval_text(b.median_secs),
                 b.observations
             ),
+            filter,
         });
     }
 
     // ⑤ ラベルの形(トンネリング・DGA)
     for t in tunneling(db.domain_query_counts_since(since_ts).await?) {
+        // **親そのものは引かれていない**ので、子をまとめて見せる(`*` はPi-holeが解釈する)
+        let filter = QueryFilter::domain(&format!("*.{}", t.parent));
         reasons.entry(t.parent).or_default().push(Reason {
             kind: "label_shape",
             detail: format!(
                 "毎回ちがう長い名前を{}個引いている(同じ名前を繰り返していない)",
                 t.distinct
             ),
+            filter,
         });
     }
 
@@ -286,10 +451,13 @@ pub async fn candidates(db: &Db, now: f64) -> Result<WatchResult> {
         window_hours: (((now - since_ts) / 3600.0).round() as i64).max(0),
         baseline,
         since: since_secs,
+        until: now as i64,
         baseline_clamped,
         data_hours,
         total_domains: stats.domains,
         qtypes,
+        methods: methods(backfill_days),
+        pihole_url: pihole_url.to_string(),
         items,
     })
 }
@@ -596,6 +764,55 @@ mod tests {
         assert_eq!(interval_text(600.0), "10分");
         assert_eq!(interval_text(3600.0), "1時間");
         assert_eq!(interval_text(5400.0), "1.5時間");
+    }
+
+    #[test]
+    fn reason_filter_uses_pihole_parameter_names() {
+        // **キー名は Pi-hole の GET パラメータそのもの。** 画面はこれをそのまま
+        // `/admin/queries.lp?...` に並べるので、名前を変えるとリンクが黙って効かなくなる
+        // (押しても絞り込まれていないクエリログが開く)
+        let full = QueryFilter::domain("example.com")
+            .client("10.0.0.5")
+            .qtype("TXT")
+            .reply("NXDOMAIN");
+        let json = serde_json::to_string(&full).expect("filterをJSONにできない");
+        for expected in [
+            "\"domain\":\"example.com\"",
+            "\"client_ip\":\"10.0.0.5\"",
+            "\"type\":\"TXT\"",
+            "\"reply\":\"NXDOMAIN\"",
+        ] {
+            assert!(json.contains(expected), "{expected} が入っていない: {json}");
+        }
+        // **持っていない条件は出さない。** 空の値を並べると、絞り込みが効かないどころか
+        // 「そのドメインで種別が空のクエリ」を探しに行く
+        assert_eq!(
+            serde_json::to_string(&QueryFilter::domain("a.example.com")).unwrap(),
+            "{\"domain\":\"a.example.com\"}"
+        );
+    }
+
+    #[test]
+    fn methods_explain_every_kind_with_its_threshold() {
+        let methods = methods(30);
+        let kinds: Vec<&str> = methods.iter().map(|m| m.kind).collect();
+        // 手を足したのに説明を足し忘れると、画面の「どうやって選んでいるか」に
+        // 出てこない理由が並ぶ
+        for kind in ["first_seen", "nxdomain", "rare_qtype", "beacon", "label_shape"] {
+            assert!(kinds.contains(&kind), "{kind} の説明が無い");
+        }
+        // **しきい値は定数から組み立てる**(散文で書き写すと、変えたときに説明だけ古くなる)
+        let how = |kind: &str| {
+            methods
+                .iter()
+                .find(|m| m.kind == kind)
+                .map(|m| m.how.clone())
+                .unwrap_or_default()
+        };
+        assert!(how("nxdomain").contains(&NXDOMAIN_MIN.to_string()));
+        assert!(how("rare_qtype").contains(&RARE_QTYPE_MIN.to_string()));
+        assert!(how("beacon").contains(&BEACON_MAX_CV.to_string()));
+        assert!(how("label_shape").contains(&LABEL_MIN_UNIQUE_RATIO.to_string()));
     }
 
     #[test]

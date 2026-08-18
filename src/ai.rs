@@ -14,6 +14,8 @@
 //! **指示文は相手で変えない。** 相手を変えたときに変わるのは書き手だけで、
 //! 聞いていることが変わってしまうと読み比べにならない。
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::chiezo::{Backend, ChiezoClient};
@@ -37,6 +39,51 @@ pub const BRIDGE_BACKEND: &str = "local:bridge";
 /// CLI ブリッジ経由のときに画面へ出す名前。
 pub const BRIDGE_LABEL: &str = "Claude Code(CLIブリッジ)";
 
+/// どちらの一覧について聞いているか。**指示文はこれで変える。**
+///
+/// **相手(経路)では変えない**が、材料が違えば聞くことも違う ——
+/// ブロック済みの一覧は「Pi-hole が止めたもの」なので「なぜ止まったか」を聞けばよいが、
+/// 監視の一覧は**ブロックの結果ではなく、通信の振る舞いから選んだ候補**で、
+/// 同じ文言で聞くと**「ブロックされたと考えられます」という嘘のメモが並ぶ**
+/// (実際にそうなっていた)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskMode {
+    /// Pi-hole がブロックリストで止めたドメイン(`/api/domains` の一覧)
+    Blocked,
+    /// 素通りしている通信から、振る舞いで拾った候補(`/api/watch` の一覧)
+    Watch,
+}
+
+impl AskMode {
+    /// 画面から来た文字列を読む。**知らない値はブロック済み扱い** ——
+    /// 既定の一覧がそちらで、指定が無い呼び出し(古い画面・手で叩いたcurl)もそこに倒れる。
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim() {
+            "watch" => Self::Watch,
+            _ => Self::Blocked,
+        }
+    }
+
+    fn system_prompt(self) -> &'static str {
+        match self {
+            Self::Blocked => SYSTEM_PROMPT_BLOCKED,
+            Self::Watch => SYSTEM_PROMPT_WATCH,
+        }
+    }
+
+    /// 「詳しく調べる」で、材料の出どころを1文で伝える文。
+    /// **これが無いと、素通りしている通信まで「ブロックされた」前提で説明される。**
+    fn origin(self) -> &'static str {
+        match self {
+            Self::Blocked => "このドメインは Pi-hole のブロックリスト(広告/トラッキング)に載っていて、実際にブロックされています。",
+            Self::Watch => "このドメインはブロックリストで止まったものではありません。\
+                Pi-hole が記録したDNSの問い合わせの中から、振る舞い(はじめて見た・NXDOMAINが多い・\
+                珍しいクエリ種別・規則正しい間隔・毎回ちがう長い名前)で自動的に拾った候補です。\
+                ブロックされたかどうかは判断材料に含まれていないので、そう決めつけないでください。",
+        }
+    }
+}
+
 /// 何を聞くか。**ドメイン名以外はここに全部書く** —— 相手ごとに文言が散ると、
 /// 切り替えたときに回答の違いが相手の差なのか指示の差なのか分からなくなる。
 ///
@@ -47,10 +94,30 @@ pub const BRIDGE_LABEL: &str = "Claude Code(CLIブリッジ)";
 /// 出力は**一覧に並ぶメモ**なので1〜2文に抑えさせる(3〜5行あると読めない。
 /// **相手が複数なら人数ぶん並ぶ**ので、短さの意味はさらに大きい)。
 /// **番号で対応を返させる**(ドメイン名を書き写させると綴りが揺れて突き合わせできない)。
-const SYSTEM_PROMPT: &str = "あなたはDNSとネットワークに詳しい技術者です。\
+const SYSTEM_PROMPT_BLOCKED: &str = "あなたはDNSとネットワークに詳しい技術者です。\
     Pi-holeの広告/トラッキングブロックリストによってブロックされたドメインについて、\
     それぞれが何のサービスに関連し、なぜブロックされていそうかを日本語で1〜2文に\
     まとめてください。\
+    出力は次の形のJSONだけにし、説明・前置き・コードフェンスは書かないでください。\
+    {\"results\":[{\"n\":1,\"note\":\"…\"}]}\
+    n は入力の番号です。番号は必ず入力どおりに対応させ、ドメイン名は書かないでください。\
+    分からないドメインも推測せず、その旨を1文で書いてください。";
+
+/// 監視の一覧([`AskMode::Watch`])用。**ブロックを前提にした書き方を禁じるのが要点。**
+///
+/// こちらの一覧はブロックの結果ではなく、通信の振る舞いから拾った候補なので、
+/// 知りたいのは「なぜ止まったか」ではなく**「何の通信で、それは普通に起きることか」**。
+/// **候補に挙げた理由(観測した事実)も一緒に渡す** —— 同じドメインでも、
+/// 「はじめて見た」のと「10分おきに鳴っている」のとでは書くべきことが違う。
+const SYSTEM_PROMPT_WATCH: &str = "あなたはDNSとネットワークに詳しい技術者です。\
+    家庭内のPi-holeが記録したDNSの問い合わせから、「いつもと違う振る舞い」として\
+    自動で候補に挙げたドメインを見てもらいます。\
+    これらはブロックリストで止まったものではありません。\
+    「ブロックされた」「ブロックされて当然」のような、ブロックされたことを前提にした\
+    書き方はしないでください。\
+    それぞれについて、何のサービス・製品が使うドメインで、その通信は普通に起きるものか\
+    (あるいは気に留めた方がよいか)を日本語で1〜2文にまとめてください。\
+    各行の括弧の中は、こちらが候補に挙げた理由(観測した事実)です。判断の材料にしてください。\
     出力は次の形のJSONだけにし、説明・前置き・コードフェンスは書かないでください。\
     {\"results\":[{\"n\":1,\"note\":\"…\"}]}\
     n は入力の番号です。番号は必ず入力どおりに対応させ、ドメイン名は書かないでください。\
@@ -290,7 +357,15 @@ impl Ai {
     /// 47件を1件ずつ聞くと固定費を47回払う。**まとめて渡すこと自体が対策**。
     ///
     /// **相手には同時に投げる。** 順に聞くと待ち時間が人数ぶん積み上がる。
-    pub async fn ask_about_domains(&self, domains: &[String]) -> Result<Answer, AskError> {
+    ///
+    /// `reasons` は「候補に挙げた理由」(監視の一覧のときだけ入る。ドメイン→理由の文)。
+    /// **無ければ足さない** —— 空の括弧を並べても材料にならない。
+    pub async fn ask_about_domains(
+        &self,
+        domains: &[String],
+        reasons: &HashMap<String, String>,
+        mode: AskMode,
+    ) -> Result<Answer, AskError> {
         if domains.is_empty() {
             return Err(AskError::Failed("聞く対象がありません".to_string()));
         }
@@ -299,7 +374,10 @@ impl Ai {
         let user_prompt = domains
             .iter()
             .enumerate()
-            .map(|(i, domain)| format!("{}. {domain}", i + 1))
+            .map(|(i, domain)| match reason_of(reasons, domain) {
+                Some(reason) => format!("{}. {domain}({reason})", i + 1),
+                None => format!("{}. {domain}", i + 1),
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -311,7 +389,10 @@ impl Ai {
                 let ai = self.clone();
                 let prompt = user_prompt.clone();
                 let domains = domains.to_vec();
-                tokio::spawn(async move { ai.ask_target(&target, &prompt, &domains).await })
+                tokio::spawn(async move {
+                    ai.ask_target(&target, mode.system_prompt(), &prompt, &domains)
+                        .await
+                })
             })
             .collect();
 
@@ -356,14 +437,18 @@ impl Ai {
     }
 
     /// 相手1人に聞く。返すのは (書き手の名前, ドメインごとのメモ)。
+    ///
+    /// **指示文は受け取る**(どちらの一覧かで変わる)。**相手では変えない** ——
+    /// 切り替えたときに変わるのが書き手だけであるように。
     async fn ask_target(
         &self,
         target: &AiChoice,
+        system_prompt: &'static str,
         user_prompt: &str,
         domains: &[String],
     ) -> Result<(String, Vec<(String, String)>), AskError> {
         let (text, author) = if target.is_bridge() {
-            let text = self.claude.ask(SYSTEM_PROMPT, user_prompt).await?;
+            let text = self.claude.ask(system_prompt, user_prompt).await?;
             (text, BRIDGE_LABEL.to_string())
         } else {
             // **Chiezo が未設定なら選択から落としてある**ので、ここに来るのは設定済みのとき
@@ -378,7 +463,7 @@ impl Ai {
                     // メモを1〜2文で書かせるだけなので web は要らない
                     false,
                     self.chiezo_timeout,
-                    SYSTEM_PROMPT,
+                    system_prompt,
                     user_prompt,
                 )
                 .await
@@ -402,15 +487,34 @@ impl Ai {
     /// **web 検索と観測データの両方を渡す**ので、通常の問い合わせよりずっと時間がかかる
     /// (上限は `INVESTIGATE_TIMEOUT`)。
     ///
+    /// `mode` は**どちらの一覧から押されたか**。ブロック済みなら「止まっている」、
+    /// 監視なら「振る舞いで拾った候補で、ブロックされたとは限らない」と伝える ——
+    /// これを渡さないと、素通りしている通信まで「ブロックされた」前提で説明される。
+    /// `reason` は候補に挙げた理由(監視のときだけ。空なら足さない)。
+    ///
     /// 戻り値は (書き手の名前, 調べた結果)。**メモの書式は通常と同じ**
     /// (`[書き手] 本文`)にして、画面が出し分けなくて済むようにしてある。
-    pub async fn investigate(&self, domain: &str, profile: &str) -> Result<(String, String), AskError> {
+    pub async fn investigate(
+        &self,
+        domain: &str,
+        profile: &str,
+        mode: AskMode,
+        reason: &str,
+    ) -> Result<(String, String), AskError> {
         let target = self.primary_target().await;
+        let reason = reason.trim();
+        let reason_line = if reason.is_empty() {
+            String::new()
+        } else {
+            format!("この画面が候補に挙げた理由: {reason}\n")
+        };
         let user_prompt = format!(
             "調べる対象のドメイン: {domain}
-
+{}
+{reason_line}
              このネットワークでの観測データ:
-{profile}"
+{profile}",
+            mode.origin()
         );
 
         let (text, author) = if target.is_bridge() {
@@ -458,6 +562,15 @@ impl Ai {
     pub fn save_token(&self, token: &str) -> anyhow::Result<()> {
         self.claude.save_token(token)
     }
+}
+
+/// そのドメインの「候補に挙げた理由」。**空白だけなら無い扱い** ——
+/// 空の括弧を渡すと、材料が無いのに何かあるように読める。
+fn reason_of<'a>(reasons: &'a HashMap<String, String>, domain: &str) -> Option<&'a str> {
+    reasons
+        .get(domain)
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
 }
 
 /// 相手ごとの答えを、ドメインごとに1つのメモへまとめる。
@@ -531,4 +644,42 @@ fn extract_json(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
     (start < end).then(|| text[start..=end].trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_mode_falls_back_to_blocked() {
+        assert_eq!(AskMode::parse("watch"), AskMode::Watch);
+        assert_eq!(AskMode::parse(" watch "), AskMode::Watch);
+        // 未指定・知らない値は既定の一覧(ブロック済み)に倒す ——
+        // 手で叩いたリクエストや古い画面がここに来る
+        assert_eq!(AskMode::parse(""), AskMode::Blocked);
+        assert_eq!(AskMode::parse("なにか"), AskMode::Blocked);
+    }
+
+    #[test]
+    fn watch_prompt_does_not_assume_the_domain_was_blocked() {
+        // **これが「ブロックされたと考えられます」を防いでいる本体。**
+        // 監視の一覧はブロックの結果ではないので、そう書かせない
+        let watch = AskMode::Watch.system_prompt();
+        assert!(watch.contains("ブロックされたことを前提にした"));
+        assert!(AskMode::Watch.origin().contains("ブロックリストで止まったものではありません"));
+        // ブロック済みの一覧は逆に「なぜ止まったか」を聞く。**混ぜない**
+        assert!(AskMode::Blocked.system_prompt().contains("なぜブロックされていそうか"));
+        assert_ne!(watch, AskMode::Blocked.system_prompt());
+    }
+
+    #[test]
+    fn empty_reasons_are_not_appended() {
+        let mut reasons = HashMap::new();
+        reasons.insert("a.example.com".to_string(), " 3時間前にはじめて見た ".to_string());
+        // 空白だけの理由は「無い」扱い —— 空の括弧を渡しても材料にならない
+        reasons.insert("b.example.com".to_string(), "   ".to_string());
+        assert_eq!(reason_of(&reasons, "a.example.com"), Some("3時間前にはじめて見た"));
+        assert_eq!(reason_of(&reasons, "b.example.com"), None);
+        assert_eq!(reason_of(&reasons, "c.example.com"), None);
+    }
 }

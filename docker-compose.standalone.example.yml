@@ -50,6 +50,10 @@ x-run-as: &run-as "1000:1000"
 x-app-env: &app-env
   # Pi-hole(v6)のURL。例: http://192.168.1.x:80(.env.exampleと同じ書式)
   PIHOLE_BASE_URL: "http://pihole:80"
+  # Pi-holeの管理画面のURL。監視の一覧で「理由」を押すと、その通信だけを絞り込んだ
+  # クエリログが開く。**開くのはブラウザ**なので、上がコンテナからしか引けない名前
+  # (http://pihole:80 など)ならここにLANのIPを入れる。空なら上と同じものを使う
+  PIHOLE_WEB_URL: ""
   # Pi-holeの管理パスワード
   PIHOLE_PASSWORD: ""
   # 取得するブロッククエリの件数(-1で全件)

@@ -50,6 +50,8 @@ async fn main() -> Result<()> {
         ai: Ai::new(&config, db.clone())?,
         db,
         pihole: PiholeClient::new(&config)?,
+        // 画面から Pi-hole の管理画面へ飛ばすための URL(開くのはブラウザ)
+        pihole_web_url: config.pihole_web_url.clone(),
     };
 
     // DNSの取り込みは**別タスクで回し続ける**(画面の応答を待たせない)。

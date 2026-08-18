@@ -1,6 +1,6 @@
 //! `/api/*` のJSONエンドポイント。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -10,7 +10,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::ai::{Ai, AiChoice, AskError, BRIDGE_BACKEND, BRIDGE_LABEL, MAX_DOMAINS_PER_ASK};
+use crate::ai::{
+    Ai, AiChoice, AskError, AskMode, BRIDGE_BACKEND, BRIDGE_LABEL, MAX_DOMAINS_PER_ASK,
+};
 use crate::db::Db;
 use crate::pihole::PiholeClient;
 
@@ -21,6 +23,9 @@ pub struct AppState {
     pub db: Db,
     pub pihole: PiholeClient,
     pub ai: Ai,
+    /// Pi-hole の**管理画面**の URL。理由の札から絞り込んだクエリログへ飛ばすために、
+    /// `/api/watch` の応答へそのまま載せる(開くのはブラウザなので、APIのURLとは別に持てる)
+    pub pihole_web_url: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -90,6 +95,13 @@ async fn watch_baseline(
 #[derive(Deserialize)]
 struct InvestigateRequest {
     domain: String,
+    /// どちらの一覧から押されたか(`"blocked"` / `"watch"`)。**指示文がこれで変わる** ——
+    /// 監視の候補を「ブロックされたドメイン」として説明させないため
+    #[serde(default)]
+    mode: String,
+    /// 候補に挙げた理由(監視のときだけ。画面が出しているものをそのまま渡す)
+    #[serde(default)]
+    reason: String,
 }
 
 /// 1件のドメインを詳しく調べる。**メインのAI1人**に、web 検索とこちらの観測データを渡す。
@@ -115,7 +127,12 @@ async fn investigate(
 
     let (author, note) = match state
         .ai
-        .investigate(&domain, &format_profile(&profile, now))
+        .investigate(
+            &domain,
+            &format_profile(&profile, now),
+            AskMode::parse(&req.mode),
+            &req.reason,
+        )
         .await
     {
         Ok(result) => result,
@@ -190,7 +207,7 @@ fn format_profile(p: &crate::db::DomainProfile, now: f64) -> String {
 /// 「ブロックされていない怪しい通信」の候補。判定は watch.rs、材料は取り込んだ蓄積。
 async fn watch(State(state): State<AppState>) -> Response {
     let now = unix_now();
-    match crate::watch::candidates(&state.db, now).await {
+    match crate::watch::candidates(&state.db, now, &state.pihole_web_url).await {
         Ok(result) => Json(result).into_response(),
         Err(e) => {
             tracing::error!(error = ?e, "怪しい通信の候補を組み立てられない");
@@ -343,6 +360,15 @@ async fn note_post(State(state): State<AppState>, Json(req): Json<ReviewRequest>
 struct AskRequest {
     #[serde(default)]
     domains: Vec<String>,
+    /// どちらの一覧について聞いているか(`"blocked"` / `"watch"`)。
+    /// **未指定はブロック済み** —— 既定の一覧がそちらなので、古い画面や手で叩いた
+    /// リクエストもそこに倒れる
+    #[serde(default)]
+    mode: String,
+    /// ドメイン → 候補に挙げた理由(監視のときだけ)。**配列ではなく対応表で受ける** ——
+    /// 並びで対応させると、重複や空白落とし(`clean`)でずれる
+    #[serde(default)]
+    reasons: HashMap<String, String>,
 }
 
 /// 聞いて、結果をそのままメモに書き戻す(1件でも複数でも同じ)。
@@ -360,7 +386,11 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Resp
         return bad_request("1回に聞ける件数を超えています");
     }
 
-    let answer = match state.ai.ask_about_domains(&domains).await {
+    let answer = match state
+        .ai
+        .ask_about_domains(&domains, &req.reasons, AskMode::parse(&req.mode))
+        .await
+    {
         Ok(answer) => answer,
         Err(AskError::TokenRequired) => {
             return (

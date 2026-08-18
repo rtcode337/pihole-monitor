@@ -196,8 +196,39 @@ function renderWatchContext() {
     const shown = m.qtypes.map(([t, n]) => `${t} ${n.toLocaleString()}`).join(' / ');
     parts.push(`<span class="watch-qtypes">この間に出たクエリ種別: ${escapeHtml(shown)}</span>`);
   }
-  box.innerHTML = parts.join('<br>');
+  box.innerHTML = parts.join('<br>') + methodsHtml(m);
   box.hidden = false;
+}
+
+// 「どうやって候補を選んでいるか」。**畳んでおく**（普段は前置きの数行だけ読めばよく、
+// 「なぜこれが挙がったのか腑に落ちない」ときに開く）。
+// **文はサーバがしきい値から組み立てたものをそのまま出す** —— ここに散文で書き写すと、
+// 定数を変えたときに説明だけが古くなる
+function methodsHtml(m) {
+  if (!m.methods || !m.methods.length) return '';
+  const rows = m.methods.map(x => `
+    <li class="watch-method">
+      <div class="watch-method-head">
+        <span class="reason reason-${escapeHtml(x.kind)}">${escapeHtml(x.label)}</span>
+        <span class="watch-method-catches">${escapeHtml(x.catches)}</span>
+      </div>
+      <div class="watch-method-how">${escapeHtml(x.how)}</div>
+      <div class="watch-method-caveat">※ ${escapeHtml(x.caveat)}</div>
+    </li>`).join('');
+
+  return `<details class="watch-methods">
+    <summary>どうやって候補を選んでいるか（${m.methods.length} つの手）</summary>
+    <p class="watch-method-lead">
+      素通りしている通信は1日に千件を超えるので、全部は並べません。下の手のどれかに
+      当たったものだけを出しています。<strong>どれも「いつもと違う」の言い換え</strong>で、
+      過去の記録と突き合わせて判定しています。判定はこのアプリの中のルールで行っていて、
+      AIには渡していません（AIに聞くのは、絞り込んだ後の「これは何か」だけ）。
+      Pi-holeがブロックしたかどうかでは絞っていないので、ブロック済みのドメインが
+      混ざることもあります。<strong>理由の札を押すと、Pi-holeのクエリログで
+      その通信だけを絞り込んで開きます。</strong>
+    </p>
+    <ul class="watch-method-list">${rows}</ul>
+  </details>`;
 }
 
 function showFetchError() {
@@ -257,10 +288,44 @@ function verdictBadge(d) {
   return '';
 }
 
+// 理由の元になった通信を、Pi-hole のクエリログで絞り込んで開く URL。
+// **パラメータ名は Pi-hole のものをサーバがそのまま返している**（domain / client_ip /
+// type / reply）ので、ここは値をエンコードして並べるだけでよい —— 手ごとに違う絞り込み方
+// （種別なら type、NXDOMAIN なら reply）を画面側に散らかさない。
+// 時間の範囲は**判定に使った窓とそろえる**（画面が持つ現在時刻は使わない）。
+// Pi-hole の管理画面の URL が分からなければ空を返し、呼び出し側がリンクをやめる
+function piholeQueryUrl(filter) {
+  if (!watchMeta || !watchMeta.pihole_url || !filter) return '';
+  const params = Object.entries(filter).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
+  if (!params.length) return '';
+  if (watchMeta.since) params.push(`from=${watchMeta.since}`);
+  if (watchMeta.until) params.push(`until=${watchMeta.until}`);
+  return `${watchMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
+}
+
+// AIに渡す「候補に挙げた理由」。**画面に出している文をそのまま渡す** ——
+// 人が読んでいる根拠とAIが見ている根拠が食い違うと、答えが当たっているのか判断できない
+function reasonText(d) {
+  if (!d || !d.reasons || !d.reasons.length) return '';
+  const detail = d.reasons.map(r => r.detail).join(' / ');
+  return (d.clients && d.clients.length)
+    ? `${detail}。この間に引いた端末: ${d.clients.join(', ')}`
+    : detail;
+}
+
 function reasonsHtml(d) {
   if (!d.reasons || !d.reasons.length) return '';
   const items = d.reasons
-    .map(r => `<span class="reason reason-${escapeHtml(r.kind)}">${escapeHtml(r.detail)}</span>`)
+    .map(r => {
+      const cls = `reason reason-${escapeHtml(r.kind)}`;
+      const url = piholeQueryUrl(r.filter);
+      // **押したら元の通信が見られるようにする。** 「規則正しく鳴っている」と言われても、
+      // 本当にそうなっているかは Pi-hole のクエリログを見るのが一番早い。
+      // リンクは一覧の行の中にあるが、詳細モーダルは開かない（委譲した click が a を除いている）
+      if (!url) return `<span class="${cls}">${escapeHtml(r.detail)}</span>`;
+      return `<a class="${cls} reason-link" href="${escapeHtml(url)}" target="_blank" rel="noopener"`
+        + ` title="Pi-holeのクエリログで、この通信だけを絞り込んで開く">${escapeHtml(r.detail)}</a>`;
+    })
     .join('');
   // どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）
   const clients = (d.clients && d.clients.length)
@@ -524,7 +589,13 @@ async function askOne(domain) {
     const resp = await fetch('/api/investigate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domain})
+      // **どちらの一覧から押したかを渡す。** 渡さないと、素通りしている通信まで
+      // 「ブロックされたドメイン」として説明される。理由（観測した事実）も一緒に渡す
+      body: JSON.stringify({
+        domain,
+        mode: currentMode,
+        reason: reasonText(allDomains.find(d => d.domain === domain))
+      })
     });
     result = await resp.json();
   } catch(e) {
@@ -662,12 +733,22 @@ async function runBulkAsk() {
     note.className = 'bulk-note';
     note.textContent = `${i} / ${targets.length} 件おわり — ${chunk.length} 件を聞いています…`;
 
+    // 候補に挙げた理由を一緒に渡す（監視モードのときだけ中身が入る）。
+    // **対応表で渡す** —— 並びで対応させると、サーバ側の重複・空白落としでずれる
+    const reasons = {};
+    for (const domain of chunk) {
+      const text = reasonText(allDomains.find(d => d.domain === domain));
+      if (text) reasons[domain] = text;
+    }
+
     let result;
     try {
       const resp = await fetch('/api/ask', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({domains: chunk})
+        // **どちらの一覧かを渡す。** ブロック済みと監視では聞くことが違う
+        // （監視の候補に「ブロックされたと考えられます」と書かせない）
+        body: JSON.stringify({domains: chunk, mode: currentMode, reasons})
       });
       result = await resp.json();
     } catch(e) {

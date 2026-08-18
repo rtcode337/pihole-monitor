@@ -292,10 +292,63 @@ header h1 span { color: var(--c-text); }
   background: var(--c-red-bg);
 }
 
+/* Pi-hole のクエリログへ飛ぶ理由の札。**色は手ごとのまま**（リンクだからといって
+   青くしない —— 手の見分けが色なので、そこを潰すと意味が消える）。
+   押せることは下線と手の形で示す */
+a.reason-link {
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom-style: dashed;
+}
+
+a.reason-link:hover {
+  filter: brightness(1.25);
+  text-decoration: underline;
+}
+
 .reason-clients {
   font-size: 10px;
   color: var(--c-dim);
 }
+
+/* 「どうやって候補を選んでいるか」。**畳んでおく** ——
+   普段は前置きだけ読めばよく、腑に落ちないときに開くもの */
+.watch-methods {
+  margin-top: 8px;
+  border-top: 1px solid var(--c-border);
+  padding-top: 8px;
+}
+
+.watch-methods summary {
+  cursor: pointer;
+  color: var(--c-blue);
+  font-size: 11px;
+}
+
+.watch-method-lead {
+  margin: 8px 0 10px;
+  line-height: 1.8;
+}
+
+.watch-method-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.watch-method-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.watch-method-catches { color: var(--c-text); }
+.watch-method-how { margin-top: 2px; line-height: 1.7; }
+.watch-method-caveat { color: var(--c-dim); line-height: 1.7; }
 
 .toolbar {
   padding: 0 32px;
