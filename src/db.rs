@@ -460,6 +460,38 @@ impl Db {
         .await
     }
 
+    /// `since` 以降の (ドメイン, 端末, 時刻) を、その3つの順に並べて返す。
+    ///
+    /// **周期の判定は端末ごとに分ける。** 同じドメインを複数台が引くと間隔が混ざり、
+    /// 機械的に等間隔でも周期が消えてしまう。
+    /// 並べ替えておくことで、呼び出し側は同じ組を隣り合わせで畳める(全部をメモリに
+    /// 持たずに済む)。
+    pub async fn timeline_since(&self, since: f64) -> Result<Vec<(String, String, f64)>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT domain, client, ts FROM dns_queries
+                  WHERE ts >= ?1 ORDER BY domain, client, ts",
+            )?;
+            let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// `since` 以降の、ドメインごとの問い合わせ回数。
+    /// **ラベルの形の判定で「同じ名前を何回引いたか」を見るために使う**
+    /// (CDNは同じホスト名を何度も引き、トンネリングは毎回ちがう名前を引く)。
+    pub async fn domain_query_counts_since(&self, since: f64) -> Result<Vec<(String, i64)>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT domain, COUNT(*) FROM dns_queries WHERE ts >= ?1 GROUP BY domain",
+            )?;
+            let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
     /// ドメインごとの、`since` 以降の件数と引いたクライアント。
     /// **どの端末が引いたかは判断材料そのもの**(PCが引くのと家電が引くのでは意味が違う)。
     pub async fn domain_activity_since(

@@ -245,6 +245,21 @@ header h1 span { color: var(--c-text); }
   background: var(--c-red-bg);
 }
 
+/* 規則正しく鳴っている。**初出とは別の色**にする —— 意味がまるで違う
+   （初出は「新しい」、こちらは「機械が定期的に喋っている」） */
+.reason-beacon {
+  border-color: var(--c-green);
+  color: var(--c-green);
+  background: transparent;
+}
+
+/* トンネリングの疑い。珍しい種別と同じく一番強い色 */
+.reason-label_shape {
+  border-color: var(--c-red-border);
+  color: var(--c-red);
+  background: var(--c-red-bg);
+}
+
 .reason-clients {
   font-size: 10px;
   color: var(--c-dim);
