@@ -30,6 +30,7 @@ classDiagram
         +/api/note メモ
         +/api/ask まとめて聞く
         +/api/investigate 1件を詳しく調べる
+        +/api/followup 調査結果をもとに追加で聞く
         +/api/ai 相手の一覧と選択
     }
     class ingest {
@@ -53,6 +54,7 @@ classDiagram
     class Ai {
         +ask_about_domains() 選んだ全員に短く
         +investigate() メイン1人に深く
+        +follow_up() 調査結果を材料にもう一歩
         +primary_target()
     }
     class ChiezoClient {
@@ -165,11 +167,21 @@ flowchart TB
 
     ALL --> NOTE["domain_notes.note"]
     ONE --> RES["domain_notes.research<br/>（メモとは別）"]
+
+    B3["追加で聞く<br/>（詳細画面）"] --> FU["/api/followup"]
+    RES -.->|これまでのやり取りを材料に| FU
+    FU --> ONE2["メインの1人<br/>質問1つ・web検索あり"]
+    ONE2 -->|末尾に足す| RES
 ```
 
 **「詳しく調べる」に観測データを渡すのが要点。** そのドメインが何かは web でも分かるが、
 **このネットワークでどう振る舞っているか**はこちらしか知らない。両方を突き合わせて初めて
 「放っておいてよいか」が言える。
+
+**「追加で聞く」は「詳しく調べる」の続き。** 相手（メインの1人）も材料（観測データ・web検索）も
+上限秒数も同じで、違うのは**これまでのやり取りと質問を渡し、答えを `research` の末尾に足す**
+ところ。次の質問にはその全文を渡すので会話が続く —— 別々に持つと、2つ目の質問が
+1つ目の答えを知らないまま返ってくる。
 
 **どちらの一覧から聞いたか（`mode`）も渡す。** ブロック済みの一覧は「Pi-hole が止めたもの」
 なので「なぜ止まったか」を聞けばよいが、監視の一覧は**ブロックの結果ではなく振る舞いで

@@ -269,18 +269,51 @@ impl Db {
 
     /// 「詳しく調べる」の結果を保存する。**メモには触らない**
     /// （人が書いた判断を調査結果で上書きしないため）。
+    ///
+    /// **入れ替える**（追記ではない）。もう一度「詳しく調べる」を押すのは
+    /// 調べ直しなので、前の結果と追加の質問はそこで流れる。
     pub async fn save_research(&self, domain: String, research: String) -> Result<()> {
+        self.with_conn(move |conn| write_research(conn, &domain, &research))
+            .await
+    }
+
+    /// いまの調査結果（無ければ空文字）。**追加の質問を投げる前の材料**になる。
+    pub async fn research(&self, domain: String) -> Result<String> {
         self.with_conn(move |conn| {
-            let now = chrono::Local::now().to_rfc3339();
-            conn.execute(
-                "INSERT INTO domain_notes (domain, updated_at, note, reviewed, research, researched_at)
-                 VALUES (?1, ?2, '', 0, ?3, ?2)
-                 ON CONFLICT(domain) DO UPDATE SET
-                     research      = excluded.research,
-                     researched_at = excluded.researched_at",
-                rusqlite::params![domain, now, research],
-            )?;
-            Ok(())
+            let value: Option<String> = conn
+                .query_row(
+                    "SELECT research FROM domain_notes WHERE domain = ?1",
+                    [&domain],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(value.unwrap_or_default())
+        })
+        .await
+    }
+
+    /// 追加の質問と答えを調査結果の**末尾に足す**。返すのは足した後の全文。
+    ///
+    /// **読みと書きを1つの接続の中で済ませる**（間に他の書き込みを挟ませない）。
+    /// **入れ替えないのは、深掘りが前の答えを踏まえた続きだから** ——
+    /// 上書きすると、次の質問に渡す材料（それまでのやり取り）が消える。
+    pub async fn append_research(&self, domain: String, addition: String) -> Result<String> {
+        self.with_conn(move |conn| {
+            let current: Option<String> = conn
+                .query_row(
+                    "SELECT research FROM domain_notes WHERE domain = ?1",
+                    [&domain],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let current = current.unwrap_or_default();
+            let merged = if current.trim().is_empty() {
+                addition
+            } else {
+                format!("{}\n\n{}", current.trim_end(), addition)
+            };
+            write_research(conn, &domain, &merged)?;
+            Ok(merged)
         })
         .await
     }
@@ -685,6 +718,21 @@ impl Db {
         .await
         .context("DB操作のタスクが異常終了した")?
     }
+}
+
+/// 調査結果を書く（入れ替え）。**保存と追記で同じ1文を使う** ——
+/// 列の並びや時刻の付け方が2か所に分かれると、片方だけ直す事故が起きる。
+fn write_research(conn: &Connection, domain: &str, research: &str) -> Result<()> {
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO domain_notes (domain, updated_at, note, reviewed, research, researched_at)
+         VALUES (?1, ?2, '', 0, ?3, ?2)
+         ON CONFLICT(domain) DO UPDATE SET
+             research      = excluded.research,
+             researched_at = excluded.researched_at",
+        rusqlite::params![domain, now, research],
+    )?;
+    Ok(())
 }
 
 /// 1行を書く。`note` / `reviewed` は `None` の項目を**触らない** ——

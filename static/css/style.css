@@ -1029,6 +1029,33 @@ a.reason-link:hover {
   overflow-y: auto;
 }
 
+/* 調査結果のすぐ下に置く追加質問。**読んで浮かんだ疑問をその場で投げる**ための欄なので、
+   結果と同じ塊に見えるよう間を詰める（離すと入力欄を探すことになる） */
+.followup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin: -10px 0 16px;
+}
+
+.followup-input {
+  width: 100%;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  /* 質問が2行を超えたら伸ばせるようにする（横は伸ばさせない） */
+  resize: vertical;
+}
+
+.followup-input:focus { outline: none; border-color: var(--c-blue); }
+.followup-input:disabled { opacity: 0.6; }
+
 /* 見出しの右端にコピーのボタンを置く行（調査結果の見出し） */
 .detail-label-row {
   display: flex;

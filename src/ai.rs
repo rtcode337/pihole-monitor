@@ -141,6 +141,16 @@ const INVESTIGATE_PROMPT: &str = "あなたはDNSとネットワークセキュ�
     ■ 放置してよいか(止める場合の影響も)
     分からないことは推測せず「不明」と書いてください。    見出し以外の前置き・結び・コードフェンスは書かないでください。";
 
+/// 「調査結果をもとに、もう一歩聞く」ときの指示文。
+///
+/// **`INVESTIGATE_PROMPT` とは出力の形が違う。** あちらは何も知らない状態から
+/// 決まった見出しで一通り書かせるもの。こちらは**すでに書いた内容を材料に、
+/// 利用者の1つの問いへ答えるだけ**なので、見出しを付けさせると同じことがもう一度並ぶ。
+///
+/// **これまでのやり取りを丸ごと渡す**(`research` はそこまでの調査と質問の積み重ね)。
+/// 渡さないと、2つ目の質問が1つ目の答えを知らないまま返ってくる。
+const FOLLOWUP_PROMPT: &str = "あなたはDNSとネットワークセキュリティに詳しい技術者です。    家庭内のPi-holeが観測したドメインについて、すでに調べた結果(このあと渡します)を踏まえ、    利用者からの追加の質問に日本語で答えてください。    web検索が使えるなら、必要に応じて調べ直してください。    観測データも渡すので、一般論だけでなくこのネットワークで実際に起きていることを踏まえてください。    答えは3〜5文程度で簡潔に。見出し・前置き・結び・コードフェンスは書かないでください。    すでに書いたことをなぞらず、質問に直接答えてください。    分からないことは推測せず「不明」と書いてください。";
+
 /// 1回の問い合わせに渡せるドメインの上限。**多すぎると応答が崩れる** ——
 /// tech-antenna では200件を1回に詰めて300秒のタイムアウトを超え、まとめて失敗した。
 /// 「まとめて聞く」はこの数ずつに区切って何度も呼ぶので、進捗が出るし途中まででも残る。
@@ -517,10 +527,65 @@ impl Ai {
             mode.origin()
         );
 
+        self.ask_primary(&target, INVESTIGATE_PROMPT, &user_prompt)
+            .await
+    }
+
+    /// **調査結果をもとに、もう一歩聞く。** 相手も上限も[`Self::investigate`]と同じ
+    /// (メインの1人・web 検索あり・`INVESTIGATE_TIMEOUT`)で、違うのは
+    /// **これまでのやり取り(`research`)と質問を渡し、決まった見出しを求めないこと**。
+    ///
+    /// `research` には前の答えだけでなく、**それまでの質問と答えも入っている**
+    /// (画面が追記しているため)。渡さないと2つ目の質問が1つ目の答えを知らずに返る。
+    pub async fn follow_up(
+        &self,
+        domain: &str,
+        profile: &str,
+        mode: AskMode,
+        reason: &str,
+        research: &str,
+        question: &str,
+    ) -> Result<(String, String), AskError> {
+        let target = self.primary_target().await;
+        let reason = reason.trim();
+        let reason_line = if reason.is_empty() {
+            String::new()
+        } else {
+            format!("この画面が候補に挙げた理由: {reason}\n")
+        };
+        let user_prompt = format!(
+            "対象のドメイン: {domain}
+{}
+{reason_line}
+             これまでの調査結果(あなたや他のAIが書いたもの。質問と答えが続いていることもあります):
+{research}
+
+             このネットワークでの観測データ:
+{profile}
+
+             追加の質問: {question}",
+            mode.origin()
+        );
+
+        self.ask_primary(&target, FOLLOWUP_PROMPT, &user_prompt).await
+    }
+
+    /// メインの相手に1往復頼む(web 検索あり・長い上限)。
+    /// **「詳しく調べる」と「もう一歩聞く」で経路を1本にする** ——
+    /// 相手の選び方・web の可否・上限秒数・書き手の名乗りの扱いを2か所に分けない。
+    ///
+    /// 戻り値は (書き手の名前, 本文)。**本文の頭に書き手を付ける**
+    /// (`[書き手] 本文`)ので、画面は出し分けなくてよい。
+    async fn ask_primary(
+        &self,
+        target: &AiChoice,
+        system_prompt: &'static str,
+        user_prompt: &str,
+    ) -> Result<(String, String), AskError> {
         let (text, author) = if target.is_bridge() {
             let text = self
                 .claude
-                .ask_within(INVESTIGATE_PROMPT, &user_prompt, self.investigate_timeout)
+                .ask_within(system_prompt, user_prompt, self.investigate_timeout)
                 .await?;
             (text, BRIDGE_LABEL.to_string())
         } else {
@@ -535,8 +600,8 @@ impl Ai {
                     // **ここは web を立てる。** 運営元や評判は手元のデータからは分からない
                     true,
                     self.investigate_timeout,
-                    INVESTIGATE_PROMPT,
-                    &user_prompt,
+                    system_prompt,
+                    user_prompt,
                 )
                 .await
                 .map_err(AskError::Failed)?;

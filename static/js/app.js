@@ -27,6 +27,9 @@ let aiModalMessage = null;
 // 詳細を開いているドメイン。**ドメイン名だけを持つ**（オブジェクトを持つと、
 // AIに聞いた後の allDomains の更新が詳細に映らない）
 let detailDomain = null;
+// 詳細画面で書きかけの追加質問。**変数に持つ** —— 詳細の中身は renderDetail() が
+// innerHTML で作り直すので、textarea に入れたままだと聞いている間に消える
+let followupDraft = '';
 // チェックした行。**再描画をまたいで残す**（行のDOMは作り直される）
 const selectedDomains = new Set();
 
@@ -504,6 +507,8 @@ document.getElementById('domain-list').addEventListener('click', event => {
 });
 
 function openDetailModal(domain) {
+  // 別のドメインを開いたら書きかけの質問は捨てる（前の行への質問を投げないため）
+  if (detailDomain !== domain) followupDraft = '';
   detailDomain = domain;
   renderDetail();
   document.getElementById('detail-modal').style.display = 'flex';
@@ -541,7 +546,17 @@ function renderDetail() {
         <span>AIの調査結果${d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
         <button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>
       </div>
-      <div class="detail-research">${escapeHtml(d.research)}</div>
+      <div class="detail-research" id="detail-research">${escapeHtml(d.research)}</div>
+      <!-- **調べた結果をもとに、もう一歩聞く。** 調査結果のすぐ下に置く ——
+           読んで浮かんだ疑問をその場で投げられるのが要点で、離すと入力欄を探すことになる。
+           **調査結果が無いときは出さない**（材料が無い深掘りは「詳しく調べる」の劣化版） -->
+      <div class="followup">
+        <textarea class="followup-input" id="followup-input" rows="2"
+                  placeholder="この結果について、さらに聞く（例: 止めたら何が使えなくなる？）"
+                  oninput="setFollowupDraft(this.value)" ${asking ? 'disabled' : ''}>${escapeHtml(followupDraft)}</textarea>
+        <button class="action-btn ask-ai-btn followup-btn" onclick="askFollowup()" ${asking ? 'disabled' : ''}
+                title="メインのAIに、これまでの調査結果と観測データを渡して追加で聞きます（Ctrl+Enter）">${AI_ICON} 追加で聞く</button>
+      </div>
     ` : ''}
     <div class="detail-label">メモ</div>
     <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
@@ -628,6 +643,78 @@ async function askOne(domain) {
 
   renderDomains();
   showToast(`調べられませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
+}
+
+// ---- 調査結果をもとに、もう一歩聞く ----
+// **相手も材料も「詳しく調べる」と同じ**（メインの1人・web検索・観測データ）で、
+// 違うのは**これまでのやり取りと質問を渡す**ところ。答えは調査結果の末尾に足される
+// —— 1つ目の答えとその続きが離れると読めないし、次の質問に渡す材料も組み立てにくい。
+// 聞いている間の状態は `askingDomains` に相乗りする（「詳しく調べる」と同時に走らせない）
+
+// 書きかけを覚える。**関数を通す**（インラインの属性から変数へ直に代入すると、
+// 同じ名前の属性が要素側にあったときに黙ってそちらへ入る）
+function setFollowupDraft(value) {
+  followupDraft = value;
+}
+
+async function askFollowup() {
+  const domain = detailDomain;
+  if (!domain || askingDomains.has(domain)) return;
+  const question = (followupDraft || '').trim();
+  if (!question) { showToast('聞きたいことを入れてください', 'error'); return; }
+
+  askingDomains.add(domain);
+  renderDomains();
+
+  let result;
+  try {
+    const resp = await fetch('/api/followup', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      // mode と reason は「詳しく調べる」と同じものを渡す（材料を食い違わせない）
+      body: JSON.stringify({
+        domain,
+        question,
+        mode: currentMode,
+        reason: reasonText(allDomains.find(d => d.domain === domain))
+      })
+    });
+    result = await resp.json();
+  } catch(e) {
+    result = {success: false, error: '通信に失敗しました'};
+  }
+  askingDomains.delete(domain);
+
+  if (result.error === 'token_required') {
+    renderDomains();
+    openAiModal('トークンが未登録です。CLIブリッジの行に貼り付けて保存するか、Chiezo の相手を選んでください。');
+    return;
+  }
+
+  if (result.success && result.research) {
+    const item = allDomains.find(d => d.domain === result.domain);
+    if (item) {
+      item.research = result.research;
+      item.researched_at = result.researched_at || '';
+    }
+    // 聞けたら入力欄は空にする（同じ質問をもう一度投げないため）
+    followupDraft = '';
+    renderDomains();
+    scrollResearchToBottom();
+    showToast(`${result.author || 'AI'} が答えました`, 'success');
+    return;
+  }
+
+  // **失敗しても質問は消さない**（打ち直させない）
+  renderDomains();
+  showToast(`聞けませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
+}
+
+// 追記した答えは末尾に付く。**そこまでスクロールする** —— 調査結果は中でスクロールする
+// 箱なので、描き直したままだと前の内容が見えていて、答えが返ったのか分からない
+function scrollResearchToBottom() {
+  const box = document.getElementById('detail-research');
+  if (box) box.scrollTop = box.scrollHeight;
 }
 
 // ---- まとめてAIに聞く ----
@@ -1189,6 +1276,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
     if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();
+    // 詳細の追加質問。**書きかけがあるときだけ**（開いているだけで反応させない）
+    if (detailDomain && (followupDraft || '').trim()) askFollowup();
   }
 });
 

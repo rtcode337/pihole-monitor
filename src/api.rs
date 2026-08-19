@@ -50,6 +50,9 @@ pub fn router() -> Router<AppState> {
         // 役割も相手も違う —— こちらはメインの1人だけに、web 検索と観測データを
         // 渡して深く調べさせる
         .route("/api/investigate", post(investigate))
+        // **調べた結果をもとに、もう一歩聞く。** 相手も材料も `/api/investigate` と同じで、
+        // 違うのは「これまでのやり取りと質問を渡し、答えを調査結果の末尾に足す」ところ
+        .route("/api/followup", post(followup))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -168,6 +171,98 @@ async fn investigate(
 
 /// 観測データを渡す窓。**生のクエリが残っている範囲**(保持期間)より長くしても中身は増えない。
 const PROFILE_WINDOW_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
+/// 追加の質問の長さの上限(文字)。**長文を貼り付けさせない** ——
+/// 質問は「調べた結果のどこを掘るか」の一言で足り、
+/// 材料(調査結果・観測データ)はこちらが付ける。
+const MAX_QUESTION_CHARS: usize = 500;
+
+#[derive(Deserialize)]
+struct FollowupRequest {
+    domain: String,
+    /// 利用者の質問。**空は受け付けない**(何を聞くのか決まっていない問い合わせを投げない)
+    question: String,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// 調査結果をもとに、もう一歩聞く。**答えは調査結果の末尾に足す** ——
+/// 別の列に分けると「1つ目の答え」と「その続き」が離れて読めなくなるし、
+/// 次の質問に渡す材料(それまでのやり取り)も組み立てにくい。
+async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest>) -> Response {
+    let domain = req.domain.trim().to_string();
+    let question = req.question.trim().to_string();
+    if domain.is_empty() {
+        return bad_request("domain required");
+    }
+    if question.is_empty() {
+        return bad_request("質問を入れてください");
+    }
+    if question.chars().count() > MAX_QUESTION_CHARS {
+        return bad_request("質問が長すぎます（500文字まで）");
+    }
+
+    // **調べた結果が無ければ聞かない。** 深掘りは前の答えを踏まえた続きなので、
+    // 材料が無いまま投げると「詳しく調べる」を劣った形でやり直すだけになる
+    // (画面は調査結果があるときしか入力欄を出さないので、これは直に POST された場合の守り)
+    let research = match state.db.research(domain.clone()).await {
+        Ok(research) if !research.trim().is_empty() => research,
+        Ok(_) => return bad_request("先に「詳しく調べる」を実行してください"),
+        Err(e) => return internal_error(e, "調査結果を読み出せない"),
+    };
+
+    let now = unix_now();
+    let profile = match state
+        .db
+        .domain_profile(domain.clone(), now - PROFILE_WINDOW_SECS)
+        .await
+    {
+        Ok(profile) => profile,
+        Err(e) => return internal_error(e, "観測データを組み立てられない"),
+    };
+
+    let (author, answer) = match state
+        .ai
+        .follow_up(
+            &domain,
+            &format_profile(&profile, now),
+            AskMode::parse(&req.mode),
+            &req.reason,
+            &research,
+            &question,
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(AskError::TokenRequired) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "success": false, "error": "token_required" })),
+            )
+                .into_response();
+        }
+        Err(AskError::Failed(message)) => return bad_gateway(&message),
+    };
+
+    // **質問も一緒に残す。** 答えだけ足すと、後から読んだときに何に答えたのか分からない
+    let addition = format!("── 質問: {question}\n{answer}");
+    let merged = match state.db.append_research(domain.clone(), addition).await {
+        Ok(merged) => merged,
+        Err(e) => return internal_error(e, "調査結果を保存できない"),
+    };
+
+    Json(json!({
+        "success": true,
+        "domain": domain,
+        // **全文を返す**(画面は差分を組み立てずに描き直せばよい)
+        "research": merged,
+        "researched_at": chrono::Local::now().to_rfc3339(),
+        "author": author,
+    }))
+    .into_response()
+}
 
 /// 観測データを AI に渡す文面へ整える。**数字はそのまま渡す** ——
 /// こちらで「怪しい」と解釈してから渡すと、その解釈ごと信じた答えが返ってくる。
