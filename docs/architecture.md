@@ -31,7 +31,12 @@ classDiagram
         +/api/ask まとめて聞く
         +/api/investigate 1件を詳しく調べる
         +/api/followup 調査結果をもとに追加で聞く
+        +/api/diag 疎通の確認（ping / 経路）
         +/api/ai 相手の一覧と選択
+    }
+    class diag {
+        +run() シェルを通さず外部コマンドを1つ
+        +validate_target() ホスト名とIPの文字だけ
     }
     class ingest {
         +run() 定期取り込みを回し続ける
@@ -74,6 +79,7 @@ classDiagram
     AppState --> Ai
     api --> AppState
     api --> watch
+    api --> diag
     pages ..> main : ルーターに合流
     ingest --> Db
     ingest --> PiholeClient
@@ -209,6 +215,23 @@ stateDiagram-v2
 **測っているのは「そのドメイン自身が問題のある通信か」**であって、「人が対処すべきか」ではない。
 一覧に並ぶものは「ブロックが妥当だったもの」と「怪しく見えただけのもの」の混ざりもので、
 **「確認済み」の一語に畳むと、何が誤検知だったのかが分からなくなる**。
+
+## 疎通の確認だけ、外へパケットを出す
+
+一覧の判定はすべて「Pi-hole が記録したもの」の突き合わせで、**このアプリが自分で
+パケットを出すのは設定画面の ping / 経路だけ**（`diag.rs`）。外部コマンドを呼ぶのも
+ここ1か所なので、守りもここに閉じている。
+
+```mermaid
+flowchart LR
+    S["設定画面<br/>（相手先を入力）"] --> D["/api/diag"]
+    D --> V{"文字を確かめる<br/>英数字と . - _ :<br/>- で始まらない"}
+    V -->|違う| NG["理由を返す（400）"]
+    V -->|通る| C["Command（シェルを通さない）<br/>ping / tracepath"]
+    C --> T{"上限内に終わったか"}
+    T -->|はい| OUT["出力をそのまま返す<br/>（終了コード0でなくても）"]
+    T -->|いいえ| K["kill_on_drop で子ごと落とす"]
+```
 
 ## 更新の手順
 

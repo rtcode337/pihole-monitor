@@ -53,6 +53,9 @@ pub fn router() -> Router<AppState> {
         // **調べた結果をもとに、もう一歩聞く。** 相手も材料も `/api/investigate` と同じで、
         // 違うのは「これまでのやり取りと質問を渡し、答えを調査結果の末尾に足す」ところ
         .route("/api/followup", post(followup))
+        // 設定画面の疎通確認(ping / 経路)。**一覧の判定には関わらない** ——
+        // 名前を引いた記録だけでは「その先に届くのか」が分からないので、手で叩ける口を置く
+        .route("/api/diag", post(diag))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -522,6 +525,38 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Resp
         "missing": missing,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct DiagRequest {
+    /// `ping` か `traceroute`。**知らない値は断る**(呼ぶ側にコマンドを組ませない)
+    tool: String,
+    /// 相手先(ホスト名かIP)。文字の確かめは `diag::run` の中
+    target: String,
+}
+
+/// 疎通を確かめる(設定画面から手で叩く)。
+///
+/// **結果は加工せずに返す。** 見たいのは応答時間・欠落・どのホップで止まったかで、
+/// こちらで要約すると落ちる。**終了コードが0でなくても失敗ではない**
+/// (応答が無いのも結果のうち)ので、成功として本文と一緒に返す。
+async fn diag(State(_state): State<AppState>, Json(req): Json<DiagRequest>) -> Response {
+    let Some(tool) = crate::diag::Tool::parse(&req.tool) else {
+        return bad_request("ping か traceroute を指定してください");
+    };
+
+    match crate::diag::run(tool, &req.target).await {
+        Ok(outcome) => Json(json!({
+            "success": true,
+            "command": outcome.command,
+            "output": outcome.output,
+            "ok": outcome.ok,
+            "elapsed_ms": outcome.elapsed_ms,
+        }))
+        .into_response(),
+        // 打てなかった(相手先の形が悪い・コマンドが無い・時間切れ)。理由をそのまま出す
+        Err(message) => bad_request(&message),
+    }
 }
 
 /// `claude setup-token` で発行したトークンを保存する。

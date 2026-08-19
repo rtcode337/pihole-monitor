@@ -26,6 +26,13 @@
 </head>
 <body>
 
+<!-- 下に引っ張ったときの印。**一番上に固定して置く** ——
+     引っ張った量だけ降りてきて、離すと読み直す（app.js の pull-to-refresh） -->
+<div class="pull-indicator" id="pull-indicator" aria-hidden="true">
+  <span class="pull-arrow" id="pull-arrow">&#8595;</span>
+  <span id="pull-text">引っ張って更新</span>
+</div>
+
 <header>
   <div class="logo"></div>
   <h1>Pi-hole <span>Monitor</span></h1>
@@ -80,6 +87,7 @@
        **右端の3つは「相手 → まとめて聞く → 更新」の順**（設定 → 実行 → 読み直し） -->
   <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
   <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
+  <button class="settings-btn" onclick="openSettingsModal()" title="設定・ネットワークの確認（ping / 経路）">&#9881; 設定</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
 
@@ -169,6 +177,38 @@
     <div class="modal-actions">
       <button class="action-btn cancel-btn" onclick="closeAiModal()">閉じる</button>
       <button class="action-btn confirm-btn" onclick="saveAiSelection()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 設定。いまの中身はネットワークの確認（ping / 経路）だけ。
+     **一覧の判定には関わらない** —— 名前を引いた記録だけでは「その先に届くのか」が
+     分からないので、手で叩ける場所を用意してある -->
+<div class="modal-overlay" id="settings-modal" style="display:none" onclick="onSettingsOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-title">設定</div>
+
+    <div class="settings-section">
+      <div class="detail-label">ネットワークの確認</div>
+      <div class="settings-note">
+        ホスト名かIPを入れて、このアプリが動いているところから疎通を確かめます。
+        <strong>結果はこのアプリから見た経路</strong>で、端末から見たものとは違うことがあります。
+      </div>
+      <div class="diag-row">
+        <!-- Enter は ping（いちばんよく打つほうに割り当てる） -->
+        <input type="text" id="diag-target" class="diag-input" autocomplete="off"
+               onkeydown="if (event.key === 'Enter') runDiag('ping')"
+               placeholder="example.com / 192.168.1.10" aria-label="相手先">
+        <button class="action-btn review-btn" id="diag-ping-btn" onclick="runDiag('ping')">ping</button>
+        <button class="action-btn review-btn" id="diag-trace-btn" onclick="runDiag('traceroute')">経路</button>
+      </div>
+      <!-- 走らせたコマンドも出す。何をした結果なのか分からないと読めない -->
+      <div class="diag-command" id="diag-command" hidden></div>
+      <pre class="diag-output" id="diag-output" hidden></pre>
+    </div>
+
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeSettingsModal()">閉じる</button>
     </div>
   </div>
 </div>

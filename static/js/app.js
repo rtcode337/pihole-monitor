@@ -1108,6 +1108,147 @@ async function saveToken() {
   }
 }
 
+// ---- 設定（ネットワークの確認） ----
+// **一覧の判定には関わらない道具。** 一覧に並ぶのは「名前を引いた記録」だけなので、
+// その先に本当に届くのかは分からない —— 実際にパケットを出して確かめる場所を用意する。
+// 相手先の確かめとコマンドの組み立てはサーバ側（src/diag.rs）。画面は文字を渡すだけ
+
+function openSettingsModal(target) {
+  const field = document.getElementById('diag-target');
+  // 呼び出し元が相手先を渡してきたら入れておく（詳細から開く導線を足すときのため）
+  if (target) field.value = target;
+  document.getElementById('settings-modal').style.display = 'flex';
+  field.focus();
+}
+
+function closeSettingsModal() {
+  document.getElementById('settings-modal').style.display = 'none';
+}
+
+function onSettingsOverlayClick(event) {
+  if (event.target === document.getElementById('settings-modal')) closeSettingsModal();
+}
+
+// 打っている間は両方のボタンを止める（同時に走らせない）
+function setDiagRunning(running) {
+  document.getElementById('diag-ping-btn').disabled = running;
+  document.getElementById('diag-trace-btn').disabled = running;
+}
+
+async function runDiag(tool) {
+  const target = document.getElementById('diag-target').value.trim();
+  const commandBox = document.getElementById('diag-command');
+  const outputBox = document.getElementById('diag-output');
+  if (!target) { showToast('相手先を入れてください', 'error'); return; }
+
+  setDiagRunning(true);
+  commandBox.hidden = false;
+  commandBox.textContent = `${tool === 'ping' ? 'ping' : '経路'} を ${target} に打っています…`;
+  outputBox.hidden = true;
+  outputBox.textContent = '';
+
+  let result;
+  try {
+    const resp = await fetch('/api/diag', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tool, target})
+    });
+    result = await resp.json();
+  } catch(e) {
+    result = {success: false, error: '通信に失敗しました'};
+  }
+  setDiagRunning(false);
+
+  if (!result.success) {
+    // **理由は画面に残す**（トーストは消えるので、打ち直すときに読めない）
+    commandBox.textContent = result.error || '打てませんでした';
+    return;
+  }
+
+  // 走らせたコマンドと、かかった時間を添える。**終了コードが0でなくても結果は出す**
+  // （応答が無いのも結果のうち）
+  commandBox.textContent = `$ ${result.command}（${(result.elapsed_ms / 1000).toFixed(1)}秒`
+    + `${result.ok ? '' : ' / 応答なしか失敗'}）`;
+  outputBox.hidden = false;
+  outputBox.textContent = result.output || '（出力はありませんでした）';
+}
+
+// ---- 下に引っ張って更新 ----
+// **スマホで一番よく使う操作。** 「更新」ボタンは上のツールバーにあるので、
+// 一覧を下まで読んだ後だと戻る手間がかかる。
+// 引っ張った量だけ印を降ろし、しきい値を超えて離したら読み直す。
+// **一番上にいるときだけ**反応させる（一覧の途中で下向きに動かしたら普通のスクロール）
+
+const PULL_TRIGGER_PX = 70;   // これを超えて離したら読み直す
+const PULL_MAX_PX = 110;      // これ以上は降ろさない（引っ張り続けても伸びない）
+let pullStartY = null;
+let pullDistance = 0;
+
+function pullIndicator() {
+  return document.getElementById('pull-indicator');
+}
+
+// 印を動かす。`ready` は「いま離せば更新される」状態
+function renderPull(distance, ready) {
+  const el = pullIndicator();
+  el.style.transform = `translate(-50%, ${distance}px)`;
+  el.classList.toggle('visible', distance > 0);
+  el.classList.toggle('ready', ready);
+  document.getElementById('pull-text').textContent = ready ? '離すと更新' : '引っ張って更新';
+}
+
+function resetPull() {
+  pullStartY = null;
+  pullDistance = 0;
+  const el = pullIndicator();
+  el.classList.remove('visible', 'ready', 'loading');
+  el.style.transform = '';
+}
+
+// モーダルが開いているときは動かさない（中の文章を読むための操作を横取りしない）
+function anyModalOpen() {
+  return [...document.querySelectorAll('.modal-overlay')]
+    .some(m => m.style.display !== 'none' && m.style.display !== '');
+}
+
+document.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1 || anyModalOpen()) return;
+  // **一番上にいるときだけ**始める（途中から始めると普通のスクロールを邪魔する）
+  if (window.scrollY > 0) return;
+  pullStartY = e.touches[0].clientY;
+  pullDistance = 0;
+}, {passive: true});
+
+document.addEventListener('touchmove', e => {
+  if (pullStartY === null) return;
+  const delta = e.touches[0].clientY - pullStartY;
+  if (delta <= 0 || window.scrollY > 0) { resetPull(); return; }
+  // 引っ張るほど重くする（そのまま動かすと指に貼り付いて行き過ぎる）
+  pullDistance = Math.min(delta * 0.5, PULL_MAX_PX);
+  // **ブラウザ自前の引っ張り更新を止める。** 止めないと二重に走る
+  // （このリスナーは passive: false でないと preventDefault が効かない）
+  if (e.cancelable) e.preventDefault();
+  renderPull(pullDistance, pullDistance >= PULL_TRIGGER_PX);
+}, {passive: false});
+
+document.addEventListener('touchend', () => {
+  if (pullStartY === null) return;
+  const ready = pullDistance >= PULL_TRIGGER_PX;
+  pullStartY = null;
+  if (!ready) { resetPull(); return; }
+
+  // 読み直している間は印を出したままにする（押した結果が見えないと二度引っ張られる）
+  const el = pullIndicator();
+  el.classList.add('loading');
+  document.getElementById('pull-text').textContent = '更新しています…';
+  el.style.transform = `translate(-50%, ${PULL_TRIGGER_PX}px)`;
+  loadDomains().finally(resetPull);
+}, {passive: true});
+
+// 指が画面から外れた（着信など）ときに印が出たままにならないように
+document.addEventListener('touchcancel', resetPull, {passive: true});
+
 // **`navigator.clipboard` は安全なコンテキスト（https か localhost）でしか使えない。**
 // このアプリは LAN の IP に http で開くのが普通なので、その場合 API 自体が存在せず、
 // **押しても何も起きない**（実際そうなっていた）。古い経路（一時的な textarea への
@@ -1272,7 +1413,7 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); }
+  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); closeSettingsModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
     if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();

@@ -30,9 +30,17 @@ RUN cargo build --release
 FROM debian:trixie-slim AS runtime
 
 # ca-certificates は PIHOLE_BASE_URL を https:// にした場合に必要
-# (rustlsがOSの証明書ストアを読む)。CLIブリッジへの通信も同じクライアントを使う
+# (rustlsがOSの証明書ストアを読む)。CLIブリッジへの通信も同じクライアントを使う。
+#
+# iputils-ping / iputils-tracepath は設定画面の「ネットワークの確認」で使う。
+# **traceroute ではなく tracepath を入れている** —— このコンテナは非rootで動き、
+# traceroute は raw socket (CAP_NET_RAW) が要るので「Operation not permitted」で
+# 終わってしまう。tracepath は特権なしで動くように作られている。
+# ping が非rootで動くのは、Dockerが既定で net.ipv4.ping_group_range を開けていて、
+# iputils の ping が raw socket ではなく ICMP datagram socket を使えるため
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates iputils-ping iputils-tracepath && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/pihole-monitor /usr/local/bin/pihole-monitor

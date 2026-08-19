@@ -6,6 +6,7 @@ mod chiezo;
 mod claude;
 mod config;
 mod db;
+mod diag;
 mod ingest;
 mod pages;
 mod pihole;
