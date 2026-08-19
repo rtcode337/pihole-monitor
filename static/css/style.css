@@ -911,6 +911,13 @@ a.reason-link:hover {
   padding: 24px;
   width: 480px;
   max-width: 90vw;
+  /* **中身が画面より高くなったらモーダルごとスクロールさせる。**
+     覆いは flex で中央寄せなので、これが無いと上下がはみ出して**読めないまま
+     手も出せない**（メモや調査結果が長いと実際にそうなっていた）。
+     スクロールの場所は1つに保つ —— 中の箱にも縦スクロールを持たせると、
+     どちらが動くのか指の位置で変わって扱いにくい */
+  max-height: 88vh;
+  overflow-y: auto;
 }
 
 .modal-title {
@@ -1026,9 +1033,9 @@ a.reason-link:hover {
      1行に潰すと誰の見立てなのか読めない（一覧の .domain-note と同じ理由） */
   white-space: pre-wrap;
   word-break: break-word;
-  /* 長いメモでモーダルが画面からはみ出さないようにする（中だけスクロールさせる） */
-  max-height: 40vh;
-  overflow-y: auto;
+  /* **ここでは高さを切らない。** 切ると、メモの箱と調査結果の箱とモーダルで
+     スクロールする場所が3つになり、どれが動くのか指の位置で変わる。
+     画面からはみ出さないようにするのは `.modal` 側の役目 */
 }
 
 .detail-note.is-empty { color: var(--c-dim); }
@@ -1047,9 +1054,7 @@ a.reason-link:hover {
   margin-bottom: 16px;
   white-space: pre-wrap;
   word-break: break-word;
-  /* 長いので中でスクロールさせる（モーダルを画面から溢れさせない） */
-  max-height: 44vh;
-  overflow-y: auto;
+  /* **ここでも高さを切らない**（`.detail-note` と同じ理由。溢れの面倒は `.modal` が見る） */
 }
 
 /* ---- 設定（ネットワークの確認） ---- */

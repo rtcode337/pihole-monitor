@@ -134,7 +134,13 @@ const SYSTEM_PROMPT_WATCH: &str = "あなたはDNSとネットワークに詳し
 /// **観測データを渡すのが要点。** 「そのドメインが何か」は web でも分かるが、
 /// 「この家のネットワークでどう振る舞っているか」はこちらしか知らない。
 /// 両方を突き合わせて初めて「放っておいてよいか」が言える。
+///
+/// **最初の見出しは「ひとことでいうと」。** 調べた結果は詳細画面でしか読めないので、
+/// それだけだと一覧には何も残らない —— メモが空のときはここを抜き出してメモにする
+/// ([`one_liner`])。**一覧に出す用途を指示文に書いておく**ことで、
+/// 抜き出した1文がそのまま一覧で意味を成す長さと書き方になる。
 const INVESTIGATE_PROMPT: &str = "あなたはDNSとネットワークセキュリティに詳しい技術者です。    家庭内のPi-holeが観測したドメインについて、利用者が「放置してよいか、止めるべきか」を    判断できるように日本語で調べてください。    web検索が使えるなら、そのドメインの運営元・用途・既知の評判を調べてください。    あわせて、利用者のネットワークでの観測データ(このあと渡します)を必ず踏まえてください。    次の見出しで、それぞれ1〜3文で簡潔に書いてください。
+    ■ ひとことでいうと(一覧に出すので1〜2文。何のドメインで、放置してよいか)
     ■ 何のドメインか(運営元と用途)
     ■ どの製品・アプリが使うか(観測データの端末と矛盾しないか)
     ■ 通信の中身と頻度から言えること
@@ -212,6 +218,21 @@ fn name_with_model(label: &str, model: Option<&str>) -> String {
         }
         _ => label.to_string(),
     }
+}
+
+/// 抜き出した「ひとこと」の長さの上限(文字)。**一覧に並ぶメモ**なので、
+/// 長いと行が読めなくなる。
+const MAX_SUMMARY_CHARS: usize = 200;
+
+/// 「詳しく調べる」の結果。
+pub struct Investigation {
+    /// 書き手の名前(画面のトーストに出す)
+    pub author: String,
+    /// 調査結果の全文(`[書き手] 本文`)。`domain_notes.research` に入る
+    pub research: String,
+    /// 一覧に出す「ひとこと」(`[書き手] 1〜2文`)。**メモが空のときだけ書く**用。
+    /// 見出しが見つからなければ `None`(そのときはメモを触らない)
+    pub summary: Option<String>,
 }
 
 /// 聞いた結果(1件でもまとめてでも、相手が1人でも複数でも同じ形)。
@@ -502,15 +523,16 @@ impl Ai {
     /// これを渡さないと、素通りしている通信まで「ブロックされた」前提で説明される。
     /// `reason` は候補に挙げた理由(監視のときだけ。空なら足さない)。
     ///
-    /// 戻り値は (書き手の名前, 調べた結果)。**メモの書式は通常と同じ**
-    /// (`[書き手] 本文`)にして、画面が出し分けなくて済むようにしてある。
+    /// 戻り値は[`Investigation`]。**書式は通常のメモと同じ**(`[書き手] 本文`)にして、
+    /// 画面が出し分けなくて済むようにしてある。**「ひとこと」も切り出して返す** ——
+    /// 調べた結果は詳細画面でしか読めないので、それだけだと一覧には何も残らない。
     pub async fn investigate(
         &self,
         domain: &str,
         profile: &str,
         mode: AskMode,
         reason: &str,
-    ) -> Result<(String, String), AskError> {
+    ) -> Result<Investigation, AskError> {
         let target = self.primary_target().await;
         let reason = reason.trim();
         let reason_line = if reason.is_empty() {
@@ -527,8 +549,12 @@ impl Ai {
             mode.origin()
         );
 
-        self.ask_primary(&target, INVESTIGATE_PROMPT, &user_prompt)
-            .await
+        let (author, body) = self.ask_primary(&target, INVESTIGATE_PROMPT, &user_prompt).await?;
+        Ok(Investigation {
+            summary: one_liner(&body).map(|line| format!("[{author}] {line}")),
+            research: format!("[{author}] {body}"),
+            author,
+        })
     }
 
     /// **調査結果をもとに、もう一歩聞く。** 相手も上限も[`Self::investigate`]と同じ
@@ -567,15 +593,17 @@ impl Ai {
             mode.origin()
         );
 
-        self.ask_primary(&target, FOLLOWUP_PROMPT, &user_prompt).await
+        let (author, body) = self.ask_primary(&target, FOLLOWUP_PROMPT, &user_prompt).await?;
+        Ok((author.clone(), format!("[{author}] {body}")))
     }
 
     /// メインの相手に1往復頼む(web 検索あり・長い上限)。
     /// **「詳しく調べる」と「もう一歩聞く」で経路を1本にする** ——
     /// 相手の選び方・web の可否・上限秒数・書き手の名乗りの扱いを2か所に分けない。
     ///
-    /// 戻り値は (書き手の名前, 本文)。**本文の頭に書き手を付ける**
-    /// (`[書き手] 本文`)ので、画面は出し分けなくてよい。
+    /// 戻り値は (書き手の名前, 本文)。**本文には書き手を付けない** ——
+    /// 呼ぶ側が付ける。「詳しく調べる」は本文から「ひとこと」を切り出すので、
+    /// ここで飾りを混ぜると切り出しがその形に依存してしまう。
     async fn ask_primary(
         &self,
         target: &AiChoice,
@@ -614,7 +642,7 @@ impl Ai {
         if text.is_empty() {
             return Err(AskError::Failed(format!("{author} が空の答えを返しました")));
         }
-        Ok((author.clone(), format!("[{author}] {text}")))
+        Ok((author, text.to_string()))
     }
 
     /// CLI ブリッジ用のトークンが保存されているか。**値は返さない** ——
@@ -627,6 +655,54 @@ impl Ai {
     pub fn save_token(&self, token: &str) -> anyhow::Result<()> {
         self.claude.save_token(token)
     }
+}
+
+/// 「ひとことでいうと」の中身を切り出す(見つからなければ `None`)。
+///
+/// **調べた結果は詳細画面でしか読めない。** それだけだと一覧には何も残らないので、
+/// メモが空のときはここをメモにする。
+///
+/// **見出しの後ろに続けて書かれることも、次の行から書かれることもある**ので、
+/// どちらも拾う(`■ ひとことでいうと: …` / 見出しの次の行)。次の見出し(`■`)の手前まで。
+fn one_liner(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    // 見出しの行を探す。**「ひとこと」で始まるかだけを見る**
+    // (括弧の中の但し書きは相手が書き換えることがある)
+    let heading = lines.find(|line| {
+        let line = line.trim_start().trim_start_matches('■').trim_start();
+        line.starts_with("ひとこと")
+    })?;
+
+    // 見出しと同じ行に続けて書かれている分(`: …` や `— …`)
+    let mut parts: Vec<String> = Vec::new();
+    if let Some((_, rest)) = heading.split_once([':', '：']) {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            parts.push(rest.to_string());
+        }
+    }
+    // 次の見出しまでの行
+    for line in lines {
+        if line.trim_start().starts_with('■') {
+            break;
+        }
+        let line = line.trim();
+        if !line.is_empty() {
+            parts.push(line.to_string());
+        }
+    }
+
+    let body = parts.join(" ");
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+    // **一覧に並ぶメモ**なので長すぎると行が読めない
+    Some(if body.chars().count() > MAX_SUMMARY_CHARS {
+        body.chars().take(MAX_SUMMARY_CHARS).collect::<String>() + "…"
+    } else {
+        body.to_string()
+    })
 }
 
 /// そのドメインの「候補に挙げた理由」。**空白だけなら無い扱い** ——
@@ -735,6 +811,39 @@ mod tests {
         // ブロック済みの一覧は逆に「なぜ止まったか」を聞く。**混ぜない**
         assert!(AskMode::Blocked.system_prompt().contains("なぜブロックされていそうか"));
         assert_ne!(watch, AskMode::Blocked.system_prompt());
+    }
+
+    #[test]
+    fn one_liner_takes_the_first_heading_in_either_shape() {
+        // 見出しの次の行に書かれる形
+        let body = "■ ひとことでいうと(一覧に出すので1〜2文)\n\
+                    QNAPのNASがクラウド連携に使うドメイン。使っているなら放置してよい。\n\
+                    \n\
+                    ■ 何のドメインか(運営元と用途)\n台湾のQNAP…";
+        assert_eq!(
+            one_liner(body).as_deref(),
+            Some("QNAPのNASがクラウド連携に使うドメイン。使っているなら放置してよい。")
+        );
+
+        // 見出しと同じ行に続けて書かれる形(全角コロンも)
+        assert_eq!(
+            one_liner("■ ひとことでいうと：広告配信の計測用。止めてよい。\n■ 次の見出し\n本文")
+                .as_deref(),
+            Some("広告配信の計測用。止めてよい。")
+        );
+
+        // **見出しが無ければ None。** そのときはメモを触らない
+        // (勝手に本文の頭を切り出すと、途中で切れた文が一覧に並ぶ)
+        assert_eq!(one_liner("■ 何のドメインか\n台湾のQNAP…"), None);
+        assert_eq!(one_liner("■ ひとことでいうと\n\n■ 次"), None);
+    }
+
+    #[test]
+    fn one_liner_is_cut_so_the_list_stays_readable() {
+        let long = format!("■ ひとことでいうと\n{}", "あ".repeat(MAX_SUMMARY_CHARS + 50));
+        let cut = one_liner(&long).expect("切り出せていない");
+        assert_eq!(cut.chars().count(), MAX_SUMMARY_CHARS + 1, "…の分だけ長い");
+        assert!(cut.ends_with('…'));
     }
 
     #[test]

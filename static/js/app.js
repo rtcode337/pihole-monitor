@@ -546,7 +546,7 @@ function renderDetail() {
         <span>AIの調査結果${d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
         <button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>
       </div>
-      <div class="detail-research" id="detail-research">${escapeHtml(d.research)}</div>
+      <div class="detail-research">${escapeHtml(d.research)}</div>
       <!-- **調べた結果をもとに、もう一歩聞く。** 調査結果のすぐ下に置く ——
            読んで浮かんだ疑問をその場で投げられるのが要点で、離すと入力欄を探すことになる。
            **調査結果が無いときは出さない**（材料が無い深掘りは「詳しく調べる」の劣化版） -->
@@ -626,18 +626,21 @@ async function askOne(domain) {
   }
 
   if (result.success && result.research) {
-    // **メモには入れない。** 人が書いた（あるいは「まとめてAIに聞く」が書いた）判断を
-    // 調査結果で上書きしないため。結果は詳細画面でメモの上に出す
     const item = allDomains.find(d => d.domain === result.domain);
     if (item) {
       item.research = result.research;
       item.researched_at = result.researched_at || '';
+      // **メモが空だったときだけサーバが「ひとこと」を書いて返す。**
+      // 調べた結果は詳細画面でしか読めないので、それだけだと一覧に何も残らない。
+      // 既にメモがあれば `note` は来ない（人の判断を上書きしないのはサーバ側の決まり）
+      if (result.note) item.note = result.note;
     }
     renderDomains();
     // **調べ終わったら詳細を開く。** 30秒待たせておいて結果をどこにも出さないと、
     // 押した人は何が起きたのか分からない（開いていれば renderDetail が描き直す）
     if (detailDomain !== domain) openDetailModal(domain);
-    showToast(`${domain} を調べました（${result.author || 'AI'}）`, 'success');
+    showToast(`${domain} を調べました（${result.author || 'AI'}）`
+      + `${result.note ? ' — メモにも書きました' : ''}`, 'success');
     return;
   }
 
@@ -710,11 +713,12 @@ async function askFollowup() {
   showToast(`聞けませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
 }
 
-// 追記した答えは末尾に付く。**そこまでスクロールする** —— 調査結果は中でスクロールする
-// 箱なので、描き直したままだと前の内容が見えていて、答えが返ったのか分からない
+// 追記した答えは調査結果の末尾＝入力欄のすぐ上に付く。**入力欄を見えるところまで送る**
+// —— 詳細はモーダルごとスクロールするので、動かすのは箱の中ではなく外。
+// 送らないと、描き直したときに前の内容が見えていて、答えが返ったのか分からない
 function scrollResearchToBottom() {
-  const box = document.getElementById('detail-research');
-  if (box) box.scrollTop = box.scrollHeight;
+  const el = document.getElementById('followup-input');
+  if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
 }
 
 // ---- まとめてAIに聞く ----

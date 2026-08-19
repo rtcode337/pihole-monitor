@@ -131,7 +131,7 @@ async fn investigate(
         Err(e) => return internal_error(e, "観測データを組み立てられない"),
     };
 
-    let (author, note) = match state
+    let found = match state
         .ai
         .investigate(
             &domain,
@@ -152,22 +152,34 @@ async fn investigate(
         Err(AskError::Failed(message)) => return bad_gateway(&message),
     };
 
-    // **メモには書かない。** メモは人が書く（あるいは「まとめてAIに聞く」が書く）もので、
-    // 調査結果で黙って上書きすると、書いた判断が消える。画面は詳細でメモの上に出す
+    // 調査結果はメモとは別の列に入れる。画面は詳細でメモの上に出す
     if let Err(e) = state
         .db
-        .save_research(domain.clone(), note.clone())
+        .save_research(domain.clone(), found.research.clone())
         .await
     {
         return internal_error(e, "調査結果を保存できない");
     }
 
+    // **メモが空のときだけ「ひとこと」を書く。** 調べた以上は一覧にも一言残っていて
+    // ほしいが、**人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない**
+    // —— 調査結果で黙って上書きすると、書いた判断が消える
+    let note = match found.summary.clone() {
+        Some(summary) => match state.db.save_note_if_empty(domain.clone(), summary).await {
+            Ok(written) => written,
+            Err(e) => return internal_error(e, "メモを保存できない"),
+        },
+        None => None,
+    };
+
     Json(json!({
         "success": true,
         "domain": domain,
-        "research": note,
+        "research": found.research,
         "researched_at": chrono::Local::now().to_rfc3339(),
-        "author": author,
+        "author": found.author,
+        // 書いたときだけ入る（既にメモがあれば null）。画面はこれを見て一覧に映す
+        "note": note,
     }))
     .into_response()
 }

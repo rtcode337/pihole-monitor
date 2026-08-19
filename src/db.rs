@@ -252,6 +252,29 @@ impl Db {
         .await
     }
 
+    /// **メモが空のときだけ**書く。書いたらその中身を、既にあれば `None` を返す。
+    ///
+    /// 「詳しく調べる」で使う —— 調べた以上は一覧にも一言残っていてほしいが、
+    /// **人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない**。
+    /// 読みと書きは1つの接続の中で済ませる（間に他の書き込みを挟ませない）。
+    pub async fn save_note_if_empty(&self, domain: String, note: String) -> Result<Option<String>> {
+        self.with_conn(move |conn| {
+            let current: Option<String> = conn
+                .query_row(
+                    "SELECT note FROM domain_notes WHERE domain = ?1",
+                    [&domain],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if current.is_some_and(|note| !note.trim().is_empty()) {
+                return Ok(None);
+            }
+            upsert(conn, &domain, Some(&note), None, None)?;
+            Ok(Some(note))
+        })
+        .await
+    }
+
     /// メモをまとめて保存する(まとめてAIに聞いた結果の書き戻し)。
     /// **1つのトランザクションで書く** —— 途中で落ちたときに半分だけ残さないため。
     pub async fn save_notes(&self, notes: Vec<(String, String)>) -> Result<()> {
