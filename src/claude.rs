@@ -1,38 +1,43 @@
-//! Claude Code(CLI ブリッジ経由)への問い合わせとトークン管理。
+//! Claude Code CLI(`claude`)のヘッドレス実行とトークン管理。
 //!
 //! **Chiezo を使わないときの経路。** どの AI に聞くかを選べるのは Chiezo 越しのときだけで
 //! (`chiezo.rs`)、Chiezo の URL が未設定か、相手を選んでいない場合はここが受け持つ。
 //!
-//! **CLI はこのイメージに入っていない。** 別コンテナの CLI ブリッジ(chiezo-bridge。
-//! Claude Code を OpenAI 互換の `/chat/completions` に見せるサイドカー)へ HTTP で頼む ——
-//! CLI 本体と、それを動かすための Node で 150MB 近く積んでいたが、アプリ自体は数 MB しかない。
+//! **CLI はこのイメージに同梱してある**(Dockerfile)。アプリが `claude -p` を
+//! プロセスとして起動する。**かつては別コンテナのサイドカー**(chiezo-bridge。Claude Code を
+//! OpenAI 互換の口に見せるもの)へ HTTP で頼み、CLI をイメージから外していた ——
+//! 実体が大きくイメージが倍近くなるためだったが、**別コンテナを立てないと「AIに聞く」が
+//! 動かない**のは、置き場所の都合をそのまま利用者に負わせている。同梱なら compose を
+//! 1つ起こすだけで動く。
 //!
 //! 認証は `claude setup-token` で発行した長期OAuthトークンを使う(ホストの `~/.claude` は
-//! マウントしない)。**渡し方は共有ディレクトリの設定 DB** —— ブリッジは別コンテナなので
-//! 環境変数では渡せない。こちらが `provider_settings` 表に書き、ブリッジが読み取り専用で
-//! マウントして読む。ブリッジは要求のたびに読み直すので、入れ替えても再起動は要らない。
+//! マウントしない)。**渡し方は子プロセスの環境変数**(`CLAUDE_CODE_OAUTH_TOKEN`)——
+//! このプロセス自身の環境変数は変えない(他の子プロセスへ漏らさないため)。
+//! 起動のたびに読むので、画面で入れ替えた値がそのまま次の問い合わせに効く。
 
 use std::fs;
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, Command};
 
 use crate::ai::AskError;
 use crate::config::{AUTH_ERROR_KEYWORDS, Config};
 
-/// ブリッジ側で Claude Code を指す名前(`CHIEZO_BRIDGE_CLI` と同じ値)。
+/// トークンを置く表の行。**サイドカーだった頃と同じ形のまま**にしてある ——
+/// 形を変えると、更新した環境でトークンの入れ直しを求めることになる。
 const PROVIDER: &str = "claude";
 
-/// 道具を引く往復の上限。道具は使わせない設定で動かすので 1 回で返るが、
-/// CLI が内部で 1 往復使う場合に備えて 2 にしてある(使わなければ増えない)。
-const MAX_TURNS: u32 = 2;
+/// 子プロセスの後始末を待つ上限。**SIGKILL の後なのですぐ終わる**。
+const CHILD_WAIT: Duration = Duration::from_secs(2);
 
-/// ブリッジが読む表。**列を減らさないこと** —— ブリッジは credential しか読まないが、
-/// 同じ形のファイルを chiezo 本体が開くこともある。
+/// トークンを置く表。
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS provider_settings (
      provider    TEXT PRIMARY KEY,
      enabled     INTEGER NOT NULL DEFAULT 0,
@@ -44,33 +49,34 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS provider_settings (
 
 #[derive(Clone)]
 pub struct ClaudeClient {
-    http: reqwest::Client,
-    bridge_url: String,
+    executable: String,
+    /// 使わせるモデル。**空なら CLI の既定**(サイドカー経由だった頃と同じ)。
+    model: String,
     settings_path: PathBuf,
-    /// CLI を同梱していた頃のトークンの置き場。**初回に設定 DB へ移して消す**
-    /// (移さないと、更新した環境で入れ直しを求めることになる)。
+    /// CLI を同梱していなかった頃のトークンの置き場。**初回に設定 DB へ移して消す**。
     legacy_token_path: PathBuf,
+    /// CLI に使わせるホーム。**イメージに固定のホームを持たせない** ——
+    /// 実行ユーザーはホストに合わせて変えられる(`PIHOLE_MONITOR_UID`)ので、
+    /// 書ける場所は永続化した置き場の下に作る。**作業ディレクトリも兼ねる**:
+    /// 開発ホストでそのまま起動すると、CLI が**リポジトリの `CLAUDE.md` を読んで**
+    /// プロンプトに混ぜてしまう。空のディレクトリで走らせれば拾うものが無い。
+    home_dir: PathBuf,
     timeout: Duration,
 }
 
 impl ClaudeClient {
     pub fn new(config: &Config) -> Result<Self> {
         Ok(Self {
-            // **こちらの待ちはブリッジより長くする。** 先に切れると「ブリッジが何秒で
-            // 諦めたか」が分からなくなる(向こうは 504 と経過秒数を返してくれる)
-            http: reqwest::Client::builder()
-                .timeout(config.claude_timeout + Duration::from_secs(30))
-                .build()
-                .context("HTTPクライアントを作成できない")?,
-            bridge_url: config.claude_bridge_url.clone(),
+            executable: config.claude_executable.clone(),
+            model: config.claude_model.clone(),
             settings_path: config.state_dir.join("settings.db"),
             legacy_token_path: config.claude_token_path.clone(),
+            home_dir: config.state_dir.join("claude-home"),
             timeout: config.claude_timeout,
         })
     }
 
-    /// 保存済みのトークン。画面が「トークン入力を出すか」を決めるのに使う
-    /// (問い合わせのときに送るわけではない —— 読むのはブリッジ)。
+    /// 保存済みのトークン。画面が「トークン入力を出すか」を決めるのにも使う。
     pub fn load_token(&self) -> Option<String> {
         if let Some(token) = self.stored_token() {
             return Some(token);
@@ -88,8 +94,8 @@ impl ClaudeClient {
         }
     }
 
-    /// ブリッジ経由で Claude に聞く。**プロンプトは受け取る** —— 相手が Chiezo 越しでも
-    /// 同じ文言になるよう、指示文は `ai.rs` の1か所に置いてある。
+    /// Claude に聞く。**プロンプトは受け取る** —— 相手が Chiezo 越しでも同じ文言に
+    /// なるよう、指示文は `ai.rs` の1か所に置いてある。
     pub async fn ask(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AskError> {
         self.ask_within(system_prompt, user_prompt, self.timeout).await
     }
@@ -100,68 +106,107 @@ impl ClaudeClient {
         &self,
         system_prompt: &str,
         user_prompt: &str,
-        timeout: std::time::Duration,
+        timeout: Duration,
     ) -> Result<String, AskError> {
-        if self.load_token().is_none() {
+        let Some(token) = self.load_token() else {
             return Err(AskError::TokenRequired);
+        };
+        if let Err(e) = fs::create_dir_all(&self.home_dir) {
+            tracing::error!(error = %e, path = %self.home_dir.display(), "CLIのホームを作れない");
+            return Err(AskError::Failed(format!("claude home not writable: {e}")));
         }
 
-        let url = format!("{}/chat/completions", self.bridge_url.trim_end_matches('/'));
-        let response = self
-            .http
-            .post(&url)
-            .json(&json!({
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "chiezo_max_turns": MAX_TURNS,
-                "chiezo_timeout": timeout.as_secs_f64(),
-            }))
-            // **こちらの待ちはブリッジより長くする。** 先に切れると、
-            // 向こうが何秒で諦めたのかが分からなくなる
-            .timeout(timeout + std::time::Duration::from_secs(30))
-            .send()
-            .await;
+        let mut command = Command::new(&self.executable);
+        command
+            .arg("-p")
+            .arg("--output-format")
+            .arg("text")
+            // **指示文はこちらのものに置き換える**(既定の system prompt は
+            // コーディング用で、こちらの用途とは噛み合わない)
+            .arg("--system-prompt")
+            .arg(system_prompt)
+            // **web 検索だけ許す。** 「詳しく調べる」はドメインの運営元・評判を
+            // 外から調べる前提の指示文になっている。他の道具は許可を求めるが、
+            // `-p` では聞けないので実行されない
+            .arg("--allowed-tools")
+            .arg("WebSearch")
+            // 手元の MCP 設定を拾わせない(渡すのは自前のプロンプトだけ)
+            .arg("--strict-mcp-config")
+            // 会話を保存させない(後から再開しないし、ホームに書くものを減らせる)
+            .arg("--no-session-persistence")
+            .env("CLAUDE_CODE_OAUTH_TOKEN", token)
+            .env("HOME", &self.home_dir)
+            .current_dir(&self.home_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if !self.model.is_empty() {
+            command.arg("--model").arg(&self.model);
+        }
 
-        let response = match response {
-            Ok(response) => response,
-            Err(e) if e.is_timeout() => {
-                tracing::warn!(timeout_secs = timeout.as_secs(), "CLIブリッジへの問い合わせがタイムアウトした");
-                return Err(AskError::Failed("timeout".to_string()));
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                tracing::error!(executable = %self.executable, "claudeコマンドが見つからない");
+                return Err(AskError::Failed("claude command not found".to_string()));
             }
             Err(e) => {
-                tracing::error!(error = %e, url = %url, "CLIブリッジに繋がらない");
-                return Err(AskError::Failed("bridge unreachable".to_string()));
+                tracing::error!(error = %e, "claudeコマンドを実行できない");
+                return Err(AskError::Failed(e.to_string()));
             }
         };
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        // **本文は標準入力から渡す。** Linux の単一引数の上限(MAX_ARG_STRLEN = 128KiB)に
+        // 当たると起動そのものができない —— 監視の一覧は数十件ぶんのドメインと理由を
+        // 渡すので、材料が増えると届く長さになる
+        let mut stdin = child.stdin.take();
+        let mut stdout = child.stdout.take();
+        let mut stderr = child.stderr.take();
+        let (mut out, mut err) = (String::new(), String::new());
 
-        if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
-            tracing::warn!(timeout_secs = timeout.as_secs(), "CLIブリッジが上限秒数で打ち切った");
+        let reading = async {
+            if let Some(mut pipe) = stdin.take() {
+                if let Err(e) = pipe.write_all(user_prompt.as_bytes()).await {
+                    tracing::warn!(error = %e, "claudeへプロンプトを書けない");
+                }
+                // **閉じて EOF を送る。** 開けたままだと CLI は入力の続きを待つ
+                drop(pipe);
+            }
+            if let (Some(o), Some(e)) = (stdout.as_mut(), stderr.as_mut()) {
+                let _ = tokio::join!(o.read_to_string(&mut out), e.read_to_string(&mut err));
+            }
+        };
+
+        let finished = tokio::time::timeout(timeout, reading).await;
+        if finished.is_err() {
+            tracing::warn!(timeout_secs = timeout.as_secs(), "claudeの実行がタイムアウトした");
+            stop(&mut child).await;
             return Err(AskError::Failed("timeout".to_string()));
         }
 
-        if !status.is_success() {
-            tracing::error!(status = %status, body = %excerpt(&body), "CLIブリッジがエラーを返した");
-            // 401 は「ブリッジがトークンを読めていない」。CLI 側の認証エラーは 502 の
-            // 本文(CLI の stderr)に出るので、そちらも見る
-            if status == reqwest::StatusCode::UNAUTHORIZED || is_auth_error(&body) {
+        let status = tokio::time::timeout(CHILD_WAIT, child.wait()).await;
+        let (out, err) = (out.trim().to_string(), err.trim().to_string());
+        let ok = matches!(&status, Ok(Ok(status)) if status.success());
+        if !ok {
+            tracing::error!(status = ?status, stdout = %out, stderr = %err, "claudeコマンドが異常終了した");
+            // 認証エラーは標準出力側に出ることもあるので両方を見る
+            if is_auth_error(&out) || is_auth_error(&err) {
                 self.clear_token();
                 return Err(AskError::TokenRequired);
             }
-            return Err(AskError::Failed(excerpt(&body)));
+            let message = [err, out]
+                .into_iter()
+                .find(|text| !text.is_empty())
+                .unwrap_or_else(|| "claude command failed".to_string());
+            return Err(AskError::Failed(excerpt(&message)));
         }
 
-        match answer_from(&body) {
-            Some(answer) => Ok(answer),
-            None => {
-                tracing::warn!(body = %excerpt(&body), "CLIブリッジの応答から本文を取り出せない");
-                Err(AskError::Failed("empty response from claude".to_string()))
-            }
+        if out.is_empty() {
+            tracing::warn!("claudeコマンドの標準出力が空だった");
+            return Err(AskError::Failed("empty response from claude".to_string()));
         }
+        Ok(out)
     }
 
     fn stored_token(&self) -> Option<String> {
@@ -178,7 +223,7 @@ impl ClaudeClient {
         (!token.is_empty()).then_some(token)
     }
 
-    /// CLI を同梱していた頃のトークンファイルを設定 DB へ移す(移せたら元は消す)。
+    /// CLI を同梱していなかった頃のトークンファイルを設定 DB へ移す(移せたら元は消す)。
     fn migrate_legacy_token(&self) -> Option<String> {
         let token = fs::read_to_string(&self.legacy_token_path).ok()?;
         let token = token.trim().to_string();
@@ -186,7 +231,7 @@ impl ClaudeClient {
             return None;
         }
         if let Err(e) = self.write_credential(Some(&token)) {
-            tracing::warn!(error = ?e, "保存済みトークンをCLIブリッジ用の設定へ移せない");
+            tracing::warn!(error = ?e, "保存済みトークンを設定DBへ移せない");
             return None;
         }
         if let Err(e) = fs::remove_file(&self.legacy_token_path)
@@ -194,24 +239,19 @@ impl ClaudeClient {
         {
             tracing::warn!(error = %e, "移行後の旧トークンファイルを消せない");
         }
-        tracing::info!("保存済みトークンをCLIブリッジ用の設定へ移した");
+        tracing::info!("保存済みトークンを設定DBへ移した");
         Some(token)
     }
 
-    /// トークンを書く。`None` なら無効化する(残すと古いトークンでブリッジが動き続ける)。
+    /// トークンを書く。`None` なら無効化する(残すと古いトークンで動き続ける)。
     fn write_credential(&self, token: Option<&str>) -> Result<()> {
         if let Some(dir) = self.settings_path.parent() {
             fs::create_dir_all(dir)
-                .with_context(|| format!("共有ディレクトリを作成できない: {}", dir.display()))?;
+                .with_context(|| format!("設定の置き場を作成できない: {}", dir.display()))?;
         }
 
         let conn = Connection::open(&self.settings_path)
             .with_context(|| format!("設定DBを開けない: {}", self.settings_path.display()))?;
-        // **WAL にしない。** ブリッジはこのファイルを読み取り専用でマウントして読むが、
-        // WAL の読み手は -shm への書き込みを要求するので開けなくなる。journal_mode は
-        // ファイルに焼き付く属性なので、書かないだけでは戻らない(毎回指定する)
-        conn.pragma_update(None, "journal_mode", "DELETE")
-            .context("設定DBのjournal_modeを設定できない")?;
         conn.execute_batch(SCHEMA)
             .context("provider_settingsテーブルを作成できない")?;
         conn.execute(
@@ -230,26 +270,21 @@ impl ClaudeClient {
         )
         .context("トークンを保存できない")?;
 
-        // **パーミッションは絞らない。** CLI を同梱していた頃のトークンファイルは 0600 に
-        // していたが、この設定 DB は**別コンテナのブリッジ(uid 1000 固定)が読む**。
-        // 本体の実行ユーザーはホストに合わせて変えられる(PIHOLE_MONITOR_UID)ので、
-        // 所有者だけに絞ると uid がずれた環境でブリッジが読めなくなる
+        // **他のユーザーから読めないようにする。** サイドカーへ渡していた頃は別コンテナが
+        // 読むので絞れなかったが、いま読むのはこのプロセスだけ
+        if let Err(e) = fs::set_permissions(&self.settings_path, fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!(error = %e, "設定DBのパーミッションを絞れない");
+        }
         Ok(())
     }
 }
 
-/// 応答(OpenAI 互換)から本文を取り出す。
-fn answer_from(body: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
-    let text = parsed
-        .get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()?
-        .trim()
-        .to_string();
-    (!text.is_empty()).then_some(text)
+/// 途中でやめた子プロセスを片付ける。**殺すだけでは足りない** ——
+/// `kill_on_drop` は SIGKILL を送るだけで待たないので、死んだ子はゾンビのまま残る
+/// (PID 1 がこのアプリ自身のコンテナでは、拾ってくれる init もいない)。
+async fn stop(child: &mut Child) {
+    let _ = tokio::time::timeout(CHILD_WAIT, child.kill()).await;
 }
 
 fn excerpt(text: &str) -> String {

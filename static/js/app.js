@@ -1001,11 +1001,11 @@ function renderAiList() {
   const rows = [`
     <div class="ai-row">
       <label class="ai-row-main">
-        <input type="checkbox" name="ai-backend" value="${escapeHtml(aiState.bridge_backend)}"
-               ${chosen.has(aiState.bridge_backend) ? 'checked' : ''}>
-        <span class="ai-row-name">${escapeHtml(aiState.bridge_label)}</span>
+        <input type="checkbox" name="ai-backend" value="${escapeHtml(aiState.cli_backend)}"
+               ${chosen.has(aiState.cli_backend) ? 'checked' : ''}>
+        <span class="ai-row-name">${escapeHtml(aiState.cli_label)}</span>
       </label>
-      ${primaryRadio(aiState.bridge_backend, aiState.primary)}
+      ${primaryRadio(aiState.cli_backend, aiState.primary)}
       <!-- トークンの設定はこの行の中。**値は出さない**（登録済みかどうかだけ隣に出す） -->
       <div class="ai-row-opts">
         <span class="ai-row-hint">トークン: ${aiState.token_saved ? '登録済み' : '未登録'}</span>

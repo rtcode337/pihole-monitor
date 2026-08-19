@@ -14,7 +14,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{StreamExt, iter as stream_iter};
 
 use crate::ai::{
-    Ai, AiChoice, AskError, AskMode, BRIDGE_BACKEND, BRIDGE_LABEL, MAX_DOMAINS_PER_ASK,
+    Ai, AiChoice, AskError, AskMode, CLI_BACKEND, CLI_LABEL, MAX_DOMAINS_PER_ASK,
 };
 use crate::db::Db;
 use crate::diag::Event as DiagEvent;
@@ -628,17 +628,17 @@ async fn ai_get(State(state): State<AppState>) -> Response {
 
     Json(json!({
         "chiezo_url": state.ai.chiezo_url(),
-        "bridge_label": BRIDGE_LABEL,
-        // CLIブリッジを指す予約id。**画面に埋め込まない** —— 突き合わせる値は
+        "cli_label": CLI_LABEL,
+        // 同梱の CLI を指す予約id。**画面に埋め込まない** —— 突き合わせる値は
         // サーバが持っているものをそのまま使う
-        "bridge_backend": BRIDGE_BACKEND,
+        "cli_backend": CLI_BACKEND,
         // **有無だけ。** 値は返さない —— 画面が出すのは「登録済みか」だけでよい
         "token_saved": state.ai.has_token(),
         "backends": backends,
         "selections": state.ai.selections().await,
         // **メインの1人**(「詳しく調べる」の宛先)。画面のラジオを立てるのに使う
         "primary": state.ai.primary_backend().await,
-        // 実際に聞く相手の名前(**空にならない** —— 未選択ならCLIブリッジ)
+        // 実際に聞く相手の名前(**空にならない** —— 未選択なら同梱の CLI)
         "current": state.ai.current_names().await,
         "error": error,
     }))
@@ -647,7 +647,7 @@ async fn ai_get(State(state): State<AppState>) -> Response {
 
 #[derive(Deserialize)]
 struct SelectRequest {
-    /// 空なら CLI ブリッジ経由に戻す。**複数選べる** —— 選んだ全員に聞いて、
+    /// 空なら同梱の CLI に戻す。**複数選べる** —— 選んだ全員に聞いて、
     /// 答えを1つのメモに並べる。
     #[serde(default)]
     selections: Vec<SelectEntry>,
@@ -681,14 +681,14 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
     if entries.is_empty() {
         // 戻すだけなので Chiezo に問い合わせない(繋がらなくても戻せる必要がある)
         return match state.ai.select(&[]).await {
-            Ok(()) => Json(json!({ "success": true, "current": [BRIDGE_LABEL] })).into_response(),
+            Ok(()) => Json(json!({ "success": true, "current": [CLI_LABEL] })).into_response(),
             Err(e) => internal_error(e, "AIの選択を保存できない"),
         };
     }
 
     // **Chiezo に問い合わせるのは、Chiezo の相手が選ばれているときだけ** ——
-    // CLI ブリッジだけを選ぶ操作が、Chiezo の生死に左右されないようにする
-    let backends = if entries.iter().any(|e| e.backend != BRIDGE_BACKEND) {
+    // 同梱の CLI だけを選ぶ操作が、Chiezo の生死に左右されないようにする
+    let backends = if entries.iter().any(|e| e.backend != CLI_BACKEND) {
         match state.ai.backends().await {
             Ok(backends) => backends,
             Err(message) => return bad_gateway(&message),
@@ -699,8 +699,8 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
 
     let mut choices = Vec::new();
     for entry in entries {
-        if entry.backend == BRIDGE_BACKEND {
-            choices.push(AiChoice::bridge());
+        if entry.backend == CLI_BACKEND {
+            choices.push(AiChoice::cli());
             continue;
         }
 

@@ -18,7 +18,7 @@ Pi-holeの設定（ホワイトリスト等）は一切変更せず、確認状�
   **結果はメモを上書きせず**、行を押すと開く詳細画面にメモとは別枠で出る
 - **まとめて聞くのは、既定ではメモが空のものだけ**（空いているところを埋める）。
   チェックを入れるとメモがあるものも作り直す
-- **聞く相手を画面から選べる（何人でも。「詳しく調べる」を頼むメインの1人も指定する）**。選んだ全員に同じ内容を聞き、**答えを「誰が書いたか」付きで1つのメモに並べる**（Chiezo に登録してある Claude Code / Codex / … と、CLIブリッジから選ぶ。再起動なしで反映）
+- **聞く相手を画面から選べる（何人でも。「詳しく調べる」を頼むメインの1人も指定する）**。選んだ全員に同じ内容を聞き、**答えを「誰が書いたか」付きで1つのメモに並べる**（Chiezo に登録してある Claude Code / Codex / … と、同梱の Claude Code CLI から選ぶ。再起動なしで反映）
 - 付いたメモはその場で書き直せる（AIの文章をそのまま残しても、自分の言葉に直しても）
 - **行を押すと詳細がモーダルで開く**（ドメイン全文・状態・ブロック回数・メモ全文と、行と同じ操作）
 - **スマホの幅に合わせて行を組み替える**（ドメインとメモを1段目、操作を2段目に置く）
@@ -57,9 +57,9 @@ cp .env.example .env
 | `PIHOLE_QUERY_LIMIT` | 取得するブロッククエリの件数（`-1`で全件） | `-1` |
 | `CHIEZO_BASE_URL` | Chiezo（LAN内の知識サーバー）のルートURL。入れると聞く相手を画面から選べる | 空文字（使わない） |
 | `CHIEZO_TIMEOUT` | Chiezo越しの生成1回のタイムアウト秒数 | `180` |
-| `CLAUDE_TIMEOUT` | CLIブリッジ経由の問い合わせのタイムアウト秒数 | `60` |
-| `CLAUDE_BRIDGE_URL` | CLIブリッジ（別コンテナ）のURL | `http://bridge:7013/v1` |
-| `STATE_DIR` | ブリッジと共有する設定の置き場 | `<DATA_DIR>/state` |
+| `CLAUDE_TIMEOUT` | 同梱のCLIへの問い合わせのタイムアウト秒数 | `60` |
+| `CLAUDE_MODEL` | CLIに使わせるモデル（空ならCLIの既定） | 空 |
+| `STATE_DIR` | 設定（トークン・CLIのホーム）の置き場 | `<DATA_DIR>/state` |
 
 ## 起動
 
@@ -112,10 +112,10 @@ Rust（1.97以降）が入っていれば、コンテナを経由せずに動か
 DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo run
 ```
 
-`DATA_DIR` はDBと共有設定の置き場（既定は `/data`。コンテナ用の絶対パスなのでホストでは上書きする）。
+`DATA_DIR` はDBと設定の置き場（既定は `/data`。コンテナ用の絶対パスなのでホストでは上書きする）。
 「AIに聞く」を試す場合は相手が要る。Chiezo が動いていれば `CHIEZO_BASE_URL=http://<ChiezoのIP>:7010`
-を渡すだけでよい。CLIブリッジ経由を試すなら composeの `bridge` だけ上げて
-`CLAUDE_BRIDGE_URL` をそちらへ向ける。
+を渡すだけでよい。Claude Code に頼むなら、ホストに `claude` が入っていればそのまま動く
+（イメージには同梱してある。別の場所に入れている場合は `CLAUDE_EXECUTABLE` で指す）。
 
 ### リポジトリを置けない環境（NASのコンテナマネージャー等）
 
@@ -140,7 +140,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 | 経路 | 相手 | 認証 |
 |---|---|---|
 | **Chiezo**（LAN内の知識サーバー） | Chiezoに登録してある全部（Claude Code / Codex / …） | **不要**（鍵はChiezoが持っている） |
-| **CLIブリッジ**（サイドカー） | Claude Code だけ | `claude setup-token` のトークンを画面から登録 |
+| **同梱のCLI**（イメージに入っている `claude`） | Claude Code だけ | `claude setup-token` のトークンを画面から登録 |
 
 どちらの経路でも聞く内容（プロンプト）は同じ。結果には**誰が書いたか**が付く
 （モデル名まで。「相手の既定に任せる」で頼んだときは、応答が名乗ったモデルを出す）。
@@ -174,7 +174,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 
 `CHIEZO_BASE_URL` に Chiezo の**ルートURL**（`http://192.168.1.x:7010`。**`/v1` は付けない**）を
 入れて起動すると、「AI: …」ボタンから相手・モデル・考える量を選べる。
-未設定のあいだは選択肢がCLIブリッジ1つだけになる。
+未設定のあいだは選択肢が同梱のCLI 1つだけになる。
 
 - 相手の一覧は Chiezo の `/v1/ai/backends`、生成は `/v1/ai/complete` から取る
   （知識ベースを引く `/v1/chat` は使わない——プロンプトは自前で持っているため）
@@ -183,18 +183,18 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
   戻る経路が塞がれている）。そのときはChiezoのネットワークに相乗りして
   `http://chiezo-api:7010` を指す（手順は `docker-compose.yml` のコメント）
 
-### CLIブリッジ経由（Claude Code）
+### 同梱のCLI経由（Claude Code）
 
-**別コンテナのCLIブリッジ**（`bridge`。Claude Code CLIをOpenAI互換の
-`/chat/completions` に見せるサイドカー）へHTTPで頼む。**本体のイメージにCLIは入っていない** ——
-以前はnpmで同梱していて、CLIとNodeだけで150MB近くあった（アプリ本体は3MB）。
-ブリッジはホストへポートを公開しない（認証が無く、トークンも読めるため）。
+**Claude Code の CLI をイメージに同梱してある**ので、別のコンテナを立てなくても動く。
+アプリが `claude -p` をプロセスとして起動し、その出力を答えとして使う。
+入れてあるのは**ネイティブの単一実行ファイル1つだけ**（node も npm も要らない）。
+かつては別コンテナのサイドカー（`bridge`）へHTTPで頼んでいた。
 
 課金される従量課金APIキーではなく、**`claude setup-token` で発行した長期OAuthトークン**を使う方式を取っている。ホストの`~/.claude`はマウントしない。
 
-- **トークンの設定は「AI: …」ボタンで開くダイアログの中**（CLIブリッジの行に貼り付けて「保存」）。登録済みかどうかもそこに出る（値は表示しない）。Chiezo の相手を選んでいるときは不要
+- **トークンの設定は「AI: …」ボタンで開くダイアログの中**（同梱のCLIの行に貼り付けて「保存」）。登録済みかどうかもそこに出る（値は表示しない）。Chiezo の相手を選んでいるときは不要
 - ブラウザやターミナルが使える別の端末で `claude setup-token` を実行し、表示されたトークンを貼り付けて保存する。未登録のまま聞こうとしたときは、そのダイアログが自動で開く
-- 保存されたトークンは `data/state/settings.db` に入り、ブリッジが読み取り専用で読む（要求のたびに読み直すので、入れ替えてもブリッジの再起動は要らない）
+- 保存されたトークンは `data/state/settings.db` に入り（`0600`）、問い合わせのたびに読んで**子プロセスの環境変数**で渡す。入れ替えても再起動は要らない
 - 以前の `data/claude_token` が残っている環境では、初回の問い合わせ時に自動で移し替える（移した後にファイルは消える）
 - トークンが期限切れ等で認証エラーになった場合は自動的に破棄され、次回の押下時に再度入力ダイアログが表示される
 
@@ -217,7 +217,7 @@ pihole-monitor/
     pihole.rs         # Pi-hole v6 API連携
     ai.rs             # 「AIに聞く」の入口（相手の選択・プロンプト・経路の振り分け）
     chiezo.rs         # Chiezoの AI エンドポイント（相手の一覧・生成）
-    claude.rs         # CLIブリッジへの問い合わせ・トークン管理
+    claude.rs         # 同梱のCLIの実行・トークン管理
     api.rs            # /api/* のJSONエンドポイント
     pages.rs          # 画面の配信（HTML/CSS/JSを埋め込み）
   static/             # 画面（index.html / css / js）とアイコン・マニフェスト
@@ -227,9 +227,9 @@ pihole-monitor/
   docker-compose.yml            # 通常用（GHCRのイメージをpull。手元ビルドも可）
   docker-compose.standalone.example.yml # .env・クローンを置けない環境向けの雛形（値の直書き）
   .github/workflows/build-and-push-image.yml  # イメージをビルドしてGHCRへpush
-  data/               # SQLiteのDBとCLIブリッジ用の設定が入る（コンテナ外に永続化・起動時に自動生成、gitignore対象）
+  data/               # SQLiteのDBと設定（トークン・CLIのホーム）が入る（コンテナ外に永続化・起動時に自動生成、gitignore対象）
     monitor.db        # ドメインごとのメモ・確認済み、と聞く相手の選択
-    state/settings.db # Claudeのトークン（ブリッジが読み取り専用で読む）
+    state/settings.db # Claudeのトークン（0600）
 ```
 
 ## 既知の制約・注意点

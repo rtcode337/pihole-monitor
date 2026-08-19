@@ -36,7 +36,7 @@ pihole-monitor/
     diag.rs                      # 設定画面の疎通確認（ping / 経路）。外部コマンドを呼ぶ唯一の場所
     ai.rs                        # 「AIに聞く」の入口。相手の選択・プロンプト・経路の振り分け
     chiezo.rs                    # ChiezoのAIエンドポイント（相手の一覧・素の問い合わせ）
-    claude.rs                    # CLIブリッジへの問い合わせ・トークン管理
+    claude.rs                    # 同梱のCLIの実行・トークン管理
     api.rs                       # /api/* のJSONエンドポイント + AppState
     pages.rs                     # 画面・アイコンの配信（実行ファイルに埋め込み）
   static/                      # 画面とアイコン。ビルド時に実行ファイルへ埋め込まれる
@@ -58,9 +58,9 @@ pihole-monitor/
   .github/
     workflows/
       build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64のみ）
-  data/               # SQLiteのDBとCLIブリッジ用の設定が入る（コンテナ外に永続化・起動時に自動生成）
+  data/               # SQLiteのDBと設定（トークン・CLIのホーム）が入る（コンテナ外に永続化・起動時に自動生成）
     monitor.db        # 確認済みドメイン（reviewed_domains）と画面からの設定（settings）
-    state/settings.db # Claudeのトークン（ブリッジが読み取り専用で読む）
+    state/settings.db # Claudeのトークン（0600。読むのはこのアプリだけ）
 ```
 
 ### 変更したいことから読むべきファイルを引く表
@@ -80,7 +80,7 @@ pihole-monitor/
 | 疎通確認（ping / 経路）のコマンド・上限・相手先の検査を変える | `src/diag.rs`（イメージに入れる実行ファイルは`Dockerfile`） |
 | AIへの指示文（プロンプト）・聞く相手の振り分けを変える | `src/ai.rs` |
 | Chiezoの叩き方（相手の一覧・生成）を変える | `src/chiezo.rs` |
-| CLIブリッジへの問い合わせ・トークン管理を変える | `src/claude.rs` |
+| 同梱のCLIの実行・トークン管理を変える | `src/claude.rs` |
 | 確認済みドメインのDB操作・スキーマを変える | `src/db.rs` |
 | 既存/新規APIエンドポイントを変える | `src/api.rs` |
 | 画面の配信ルート（`/`・静的ファイル）を変える | `src/pages.rs` |
@@ -100,9 +100,10 @@ pihole-monitor/
 | `PIHOLE_QUERY_LIMIT` | 取得するブロッククエリの件数（`-1`で全件） | `-1` |
 | `CHIEZO_BASE_URL` | Chiezo（LAN内の知識サーバー）の**ルートURL**。`/v1`は付けない。空なら使わない | 空文字 |
 | `CHIEZO_TIMEOUT` | Chiezo越しの生成1回のタイムアウト秒数 | `180` |
-| `CLAUDE_TIMEOUT` | CLIブリッジ経由の問い合わせのタイムアウト秒数 | `60` |
-| `CLAUDE_BRIDGE_URL` | CLIブリッジ（別コンテナ）のURL | `http://bridge:7013/v1` |
-| `STATE_DIR` | ブリッジと共有する設定の置き場 | `<DATA_DIR>/state` |
+| `CLAUDE_TIMEOUT` | 同梱のCLIへの問い合わせのタイムアウト秒数 | `60` |
+| `CLAUDE_MODEL` | CLIに使わせるモデル（空ならCLIの既定） | 空 |
+| `CLAUDE_EXECUTABLE` | CLIの置き場（イメージには同梱済み） | `claude` |
+| `STATE_DIR` | 設定（トークン・CLIのホーム）の置き場 | `<DATA_DIR>/state` |
 | `DATA_DIR` | DBとトークンの置き場 | `/data` |
 | `RUST_LOG` | ログレベル（`tracing_subscriber`のEnvFilter） | `info` |
 
@@ -197,8 +198,8 @@ settings (
 | POST | `/api/note` | **メモだけ保存**（確認済みかどうかは変えない） |
 | POST | `/api/ask` | **1〜`MAX_DOMAINS_PER_ASK`件を1回の問い合わせで**聞き、結果をメモとして保存。**選んだ相手全員**に聞き、書き手（`authors`）・答えられなかった相手（`failures`）・答えの返らなかったドメイン（`missing`）を返す。**`mode`（`blocked`/`watch`）で指示文が変わり**、`reasons`（ドメイン→理由）を渡すと材料として一緒に聞く |
 | POST | `/api/followup` | **調査結果をもとに追加で聞く**（`domain`・`question`・`mode`・`reason`）。メインの1人に、これまでのやり取り＋観測データを渡す。答えは`research`の**末尾に足して**全文を返す。調査結果が無ければ400 |
-| GET | `/api/ai` | 選べる相手の一覧・**選択（複数）**・Chiezoの URL・繋がらない理由・**トークンの有無**（`token_saved`。値は返さない）・CLIブリッジの予約id（`bridge_backend`） |
-| POST | `/api/ai` | 聞く相手を保存（`selections`の配列。**空ならCLIブリッジ**に戻す） |
+| GET | `/api/ai` | 選べる相手の一覧・**選択（複数）**・Chiezoの URL・繋がらない理由・**トークンの有無**（`token_saved`。値は返さない）・同梱のCLIの予約id（`cli_backend`） |
+| POST | `/api/ai` | 聞く相手を保存（`selections`の配列。**空なら同梱のCLI**に戻す） |
 | POST | `/api/diag` | **疎通を確かめる**（`tool` = `ping` / `traceroute`、`target` = ホスト名かIP）。**応答は溜めずに流す**（1行1JSON = NDJSON。`start` 走らせたコマンド / `line` 出力の1行 / `name` その行のIPの名前 / `end` 終了コードとかかった時間 / `error`）。**終了コードが0でなくても成功として返す**（応答が無いのも結果のうち）。**打てなかったときだけ400のJSON** |
 | POST | `/api/claude-token` | `claude setup-token` で発行したトークンを保存 |
 
@@ -228,11 +229,11 @@ settings (
 | 相手 | 誰か | 認証 |
 |---|---|---|
 | Chiezo（`src/chiezo.rs`） | Chiezoに登録してある全部（Claude Code / Codex / …） | 要らない（鍵はあちら） |
-| CLIブリッジ（`src/claude.rs`。`local:bridge`） | Claude Codeだけ | `claude setup-token`のトークン |
+| 同梱のCLI（`src/claude.rs`。`local:cli`） | Claude Codeだけ | `claude setup-token`のトークン |
 
-**CLIブリッジも選択肢の1つ**（予約id `local:bridge`。`local:`を冠するのは、Chiezoの相手のidに
+**同梱のCLIも選択肢の1つ**（予約id `local:cli`。`local:`を冠するのは、Chiezoの相手のidに
 コロンが使われないため）。Chiezoの相手と一緒に選べるので、両方に聞いて読み比べられる。
-**何も選んでいなければCLIブリッジ**（Chiezoを使わない環境がそれ）。
+**何も選んでいなければ同梱のCLI**（Chiezoを使わない環境がそれ）。
 
 - **選択が複数なら全員に同時に投げる**（`tokio::spawn`）。順に聞くと待ち時間が人数ぶん
   積み上がる（実測: Claude 6秒 + Codex 15秒が、並列で15秒）。**受け取りは選んだ順** ——
@@ -264,11 +265,11 @@ settings (
   これが無いと画面はどのAIの答えを出しているのか言えない。Chiezo経由では
   **応答が名乗ったモデル**を優先する（「相手の既定に任せる」で頼んだときに、
   何が書いたのかを知る手がかりはそれだけ）
-- **選択が残っているのにChiezoが未設定（URLを外した）なら、黙ってブリッジへ倒す。**
+- **選択が残っているのにChiezoが未設定（URLを外した）なら、黙って同梱のCLIへ倒す。**
   答えが出ないより、従来の経路で答えが出るほうがよい
 - **表示名は選んだ時点の表記を保存する**（`AiChoice.label`）。表示のたびにChiezoへ
   問い合わせると、繋がらない日にボタンの名前が消える
-- トークンが要るのは**CLIブリッジが相手のときだけ**（`token_required`はそこからしか返らない）。
+- トークンが要るのは**同梱のCLIが相手のときだけ**（`token_required`はそこからしか返らない）。
   Chiezoは鍵を自分で持っている
 - **相手ごとの分岐は`ask_target()`1か所**
 
@@ -448,7 +449,7 @@ HTTPで引き直すのは重いので、手元に写しを持つ。
 - **出力をJSONにしない。** 1件の答えを1つ返すだけなので番号で対応させる必要が無く、
   長い文章をJSON文字列へ押し込む過程で崩れる余地を増やさない
 - **上限秒数は別に持つ**（`INVESTIGATE_TIMEOUT`）。web検索を伴うので、
-  1〜2文のメモを書かせるのとは桁が違う（実測30秒）。CLIブリッジ側にも
+  1〜2文のメモを書かせるのとは桁が違う（実測30秒）。CLIの実行にも
   1回ごとに上限を渡す（`ClaudeClient::ask_within`）
 - **調査結果はメモに入れない。** メモは人が書く（あるいは「まとめてAIに聞く」が書く）もので、
   調査結果で黙って上書きすると**書いた判断が消える**。別の列（`research` / `researched_at`）に持ち、
@@ -575,7 +576,7 @@ HTTPで引き直すのは重いので、手元に写しを持つ。
 #### Chiezo連携（`src/chiezo.rs`）
 
 **鍵を持たずに複数のAIを使えるようにするための経路。** 相手の認証情報はChiezoが握っていて、
-こちらは「どの相手に投げるか」を指定するだけでよい——サイドカーのCLIブリッジは
+こちらは「どの相手に投げるか」を指定するだけでよい——同梱のCLIは
 Claude Code 1つしか包めないので、**相手を選べる経路はここだけ**。
 
 ```
@@ -594,24 +595,30 @@ POST /v1/ai/complete   # 素の問い合わせ（backend / model / effort / mess
   **両方を文面に書いて確かめる先を示す**。届いた場合（HTTPエラー）だけは相手の設定の話だと言える
 - **実在しない相手・モデル・考える量は保存を断る**（`/api/ai` のPOSTが一覧と突き合わせる）。
   黙って保存すると、次に聞いたときまで間違いに気づけない。
-  **CLIブリッジへ戻すときはChiezoに問い合わせない** —— 繋がらなくても戻せる必要がある
+  **同梱のCLIへ戻すときはChiezoに問い合わせない** —— 繋がらなくても戻せる必要がある
 
 #### Claude連携（`src/claude.rs`）
 
-**CLIは同梱しない。** 別コンテナのCLIブリッジ（chiezoリポジトリの`chiezo-bridge`。Claude CodeをOpenAI互換の`/chat/completions`に見せるサイドカー）へHTTPで頼み、応答の本文をそのまま回答として返す。以前はnpmで`@anthropic-ai/claude-code`を同梱しており、**CLIで97MB・Nodeで52MB**積んでいた（アプリ本体は3MB）。CLIの更新はブリッジのコンテナを入れ替えるだけで済む。
+**CLIをイメージに同梱し、アプリが`claude -p`をプロセスとして起動する。** かつては別コンテナのCLIブリッジ（chiezoリポジトリの`chiezo-bridge`。Claude CodeをOpenAI互換の`/chat/completions`に見せるサイドカー）へHTTPで頼んでいた —— イメージを小さく保つためだったが、**別コンテナを立てないと「AIに聞く」が動かない**のは、置き場所の都合をそのまま利用者に負わせている。同梱ならcomposeを1つ起こすだけで動く。
 
+- **入れるのはネイティブの単一実行ファイル1つだけ**（Dockerfileの`claude-cli`ステージ。`@anthropic-ai/claude-code-linux-<arch>`から`claude`だけを取り出す）。nodeもnpmも要らない。**版は`CLAUDE_CODE_VERSION`で固定する** —— `latest`だと同じイメージタグでも中身が変わり、「昨日まで動いていた要約が落ちる」を再現できなくなる
+- **イメージは約570MBになる**（実測。うち316MBがCLIの実行ファイル）。同梱をやめた頃の理由（当時はCLI 97MB + Node 52MB）はいま**もっと重くなっている** —— 配布形態がJSの束からネイティブの単一実行ファイルに変わったため。**npm経由でも同じ**（`@anthropic-ai/claude-code`は170KBのランチャーで、中身は同じネイティブパッケージを引く）ので、これ以上小さくする手は無い。それでも同梱にしているのは、**別コンテナを立てないと動かないほうが困る**から
+- **`--platform=$BUILDPLATFORM`で取り出す。** 対象アーキの版はパッケージ名で選べる（`-linux-x64` / `-linux-arm64`）ので、arm64向けを作るときもエミュレーションは要らない
 - 認証は`claude setup-token`で発行した長期OAuthトークンを使う方式。ホストの`~/.claude`はマウントしない
-- **トークンは共有ディレクトリの設定DB（`$STATE_DIR/settings.db`の`provider_settings`表）に書く**。CLIは別コンテナで動くので環境変数では渡せない。ブリッジはこれを**読み取り専用でマウントして、要求のたびに読み直す**（入れ替えても再起動が要らない）。**WALにしない** —— 読み取り専用マウントでは`-shm`を作れず開けなくなる。**パーミッションは絞らない**（ブリッジはuid 1000固定で、本体の実行ユーザーはホストに合わせて変えられるため）
+- **トークンは`$STATE_DIR/settings.db`の`provider_settings`表に持つ**（サイドカーへ渡していた頃と同じ形。変えると更新した環境で入れ直しを求めることになる）。**渡し方は子プロセスの環境変数**（`CLAUDE_CODE_OAUTH_TOKEN`）—— このプロセス自身の環境変数は変えない（他の子プロセスへ漏らさないため）。起動のたびに読むので、画面で入れ替えた値がそのまま次の問い合わせに効く。**パーミッションは0600に絞る**（読むのはこのプロセスだけになった）
 - **旧`$DATA_DIR/claude_token`は初回に設定DBへ移して消す**。更新した環境でトークンの入れ直しを求めないため
-- トークンが未保存、またはブリッジが401（認証情報を読めていない）／応答が認証エラーらしき内容（`AUTH_ERROR_KEYWORDS`でキーワード判定。CLI自身の認証エラーは502の本文に出る）の場合、`/api/ask`は`{"success": false, "error": "token_required"}`（HTTP 401）を返す。判定に該当した場合は保存済みトークンも無効化する
-- **待ちはブリッジより30秒長くする**。先に切れると「ブリッジが何秒で諦めたか」（504と経過秒数）が分からなくなる
-- ブリッジは**ホストへポートを公開しない**。認証が無いうえにトークンを読めるので、外から触れるとそのままAIを使われる
+- **CLIのホームと作業ディレクトリは`$STATE_DIR/claude-home`**（アプリが実行時に作る）。イメージに固定のホームを持たせないのは、**実行ユーザーをホストに合わせて変えられる**（`PIHOLE_MONITOR_UID`）以上、書けるとは限らないから。**作業ディレクトリも空のここにする** —— 開発ホストでそのまま起動すると、CLIが**リポジトリの`CLAUDE.md`を読んで**プロンプトに混ぜてしまう
+- **渡す道具は`WebSearch`だけ**（`--allowed-tools`）。「詳しく調べる」はドメインの運営元・評判を外から調べる前提の指示文になっている。他の道具は許可を求めるが、`-p`では聞けないので実行されない。あわせて`--strict-mcp-config`（手元のMCP設定を拾わせない）と`--no-session-persistence`（会話を保存させない）を付ける
+- **指示文は`--system-prompt`で置き換える**（既定のsystem promptはコーディング用でこちらの用途と噛み合わない）。**本文は標準入力から渡す** —— Linuxの単一引数の上限（MAX_ARG_STRLEN = 128KiB）に当たると起動そのものができない。監視の一覧は数十件ぶんのドメインと理由を渡す
+- **モデルは`CLAUDE_MODEL`で指定できる**（空ならCLIの既定。サイドカー経由だった頃と同じ）。枠を抑えたいときに`sonnet`のような別名を渡す
+- トークンが未保存、または出力が認証エラーらしき内容（`AUTH_ERROR_KEYWORDS`でキーワード判定。標準出力側に出ることもあるので両方見る）の場合、`/api/ask`は`{"success": false, "error": "token_required"}`（HTTP 401）を返す。判定に該当した場合は保存済みトークンも無効化する
+- **打ち切るときは自分でkillして待つ**。`kill_on_drop`はSIGKILLを送るだけで待たないので、死んだ子がゾンビのまま残る（PID 1がこのアプリ自身のコンテナでは拾う者がいない。疎通確認の`diag.rs`と同じ理由）
 - フロントエンドは`error === "token_required"`を受け取ると、**聞く相手を選ぶモーダル**（`ai-modal`）を理由付きで開く。**トークンの設定はそこにある** ——
-  CLIブリッジの行に入力欄と「保存」があり、隣に「登録済み / 未登録」が出る（`/api/ai`の`token_saved`。**値は返さないし表示もしない**）。貼り付けて保存すると`POST /api/claude-token`が書く。
+  同梱のCLIの行に入力欄と「保存」があり、隣に「登録済み / 未登録」が出る（`/api/ai`の`token_saved`。**値は返さないし表示もしない**）。貼り付けて保存すると`POST /api/claude-token`が書く。
   **保存の副作用で聞き直しは走らせない**（LLMの枠を使う操作なので、押した人が改めて押して始める）。
   **専用のトークンモーダルは持たない** —— 「相手を選ぶ」と「その相手の認証を入れる」は同じ判断の続きなので、画面を2つに分けると設定の置き場が探しにくい
 - **プロンプトは受け取る**（`ask(system, user)`）。相手がChiezo越しでも同じ文言になるよう、指示文は`ai.rs`が持つ
-- タイムアウトは`CLAUDE_TIMEOUT`環境変数で制御（デフォルト60秒）。`kill_on_drop(true)`を付けているので、タイムアウトでフューチャーを捨てると子プロセスも落ちる
+- タイムアウトは`CLAUDE_TIMEOUT`環境変数で制御（デフォルト60秒）。「詳しく調べる」だけは`INVESTIGATE_TIMEOUT`（web検索を伴うので桁が違う）
 
 #### 見た目とテーマ（`static/css/style.css`）
 
@@ -792,7 +799,7 @@ HTML骨格・CSS・JSをファイルごとに分離。vanilla JS + fetch APIで�
   作り直されるので、ボタン側に持たせると消える
 - `openAiModal(message)` / `renderAiList()` / `saveAiSelection()` / `saveToken()` - 相手を選ぶモーダル。
   `message`は「なぜ開いたか」（トークン未登録など）で、状態の説明より優先して出す。
-  **先頭は常にCLIブリッジの行**（Chiezoが落ちている日にも聞けるよう、選択肢から消さない）。
+  **先頭は常に同梱のCLIの行**（Chiezoが落ちている日にも聞けるよう、選択肢から消さない）。
   `select`は`label`の**外**に置く（中に入れると、ドロップダウンを触るだけでラジオが動く）。
   **保存の失敗理由はモーダルに残す**（閉じてしまうと読めない）。
   モデル・考える量をいじったらその行のラジオを立てる——**リスナーは入れ物（`#ai-list`）に
@@ -830,7 +837,7 @@ docker compose up -d --build
 # ホストで直接動かす場合（Rust 1.97以降が必要）
 DATA_DIR=./data PIHOLE_BASE_URL=http://192.168.1.x:80 PIHOLE_PASSWORD=... cargo run
 
-# 「AIに聞く」でChiezoの相手を選べるようにする（CLIブリッジを上げなくても試せる）
+# 「AIに聞く」でChiezoの相手を選べるようにする（同梱のCLIの代わりに使える）
 DATA_DIR=./data CHIEZO_BASE_URL=http://192.168.1.x:7010 cargo run
 ```
 
@@ -864,8 +871,9 @@ bindマウント先がホストに無くてDockerがroot所有で作った場合
 （片方だけ直すと起動しなくなる）。
 
 uidを1000以外にできる設計なので、**`/etc/passwd`に載っていないuidでも動く必要がある**。
-`HOME`を使うものはもう無い（CLIを外したため）が、共有設定のパーミッションを
-所有者だけに絞れないのはこれが理由（ブリッジはuid 1000固定で読みに来る）。
+**CLIのホームをイメージに持たせないのもこれが理由** —— uidが変えられる以上、
+固定のホームを作っても書けるとは限らない。アプリが`$STATE_DIR/claude-home`を
+実行時に作り、子プロセスへ`HOME`として渡す。
 
 ## イメージの配布（GHCR / GitHub Actions）
 
@@ -879,7 +887,7 @@ uidを1000以外にできる設計なので、**`/etc/passwd`に載っていな�
   - **GHCRに残るのは最新の1版だけ**。push後に古い版を削除している（GHCRのストレージ枠はアカウント全体で共有で、超えると課金ではなくpushがブロックされる）。そのぶん過去のイメージには戻せない。世代を残すならworkflowの`min-versions-to-keep`を上げる
   - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`cargo build`が極端に遅くなるため作らない。**arm64が必要になったらQEMUではなくRustのクロスコンパイル**（`--target aarch64-unknown-linux-gnu`）でamd64ランナーからバイナリを作るほうが速い
   - リポジトリが非公開＝パッケージも非公開。デプロイ先では`read:packages`スコープのPATで`docker login ghcr.io`が必要
-- **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは3つで、`pihole-monitor-init`（所有者合わせ）・本体・`bridge`（Claude CodeのCLIを動かすサイドカー。**公開パッケージ**なのでdocker login不要）。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
+- **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは2つで、`pihole-monitor-init`（所有者合わせ）と本体（**CLIは本体のイメージに同梱**なのでサイドカーは要らない）。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
 - **`docker-compose.standalone.example.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」（データの置き場・Pi-holeの接続設定・実行ユーザー）にまとめてある。`chown`先と`user:`はどちらも`x-run-as`アンカーを参照させて、片方だけ直す事故を防いでいる。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
   - **リポジトリに置くのは`.example`の付いた雛形だけ。** 実値を入れてコピーした`docker-compose.standalone.yml`は`.gitignore`してある（`.env.example`と`.env`の関係と同じ。**この形式は値を直書きするので、追記した瞬間にPi-holeのパスワードがコミット対象に入る**）
   - **Chiezoのネットワークに相乗りする設定は、現物の位置にコメントアウトで置いてある**（サービスの`#networks: [default, chiezo]`とファイル末尾の`#networks:`）。**使うときはコメントを外すだけ** —— 手順を散文で書くと、貼り付ける側がインデントを組み直すことになる。既定で外してあるのは、`external: true`が「そのネットワークが既に在ること」を前提にするため（Chiezoを同じホストで動かしていない環境で有効にすると起動できない）
@@ -900,5 +908,5 @@ uidを1000以外にできる設計なので、**`/etc/passwd`に載っていな�
 - `claude setup-token`で発行されるトークンは長期間有効（発行時点の仕様では約1年）。期限切れ時は認証エラーを検知してトークンを破棄し、次回の「AIに聞く」押下時に再入力を促す。**Chiezoの相手を選んでいるあいだはトークンを使わない**（鍵はChiezoが持っている）
 - `data/.gitkeep`は空ディレクトリをgit管理下に置くためのプレースホルダー。古いDocker Engine（Raspberry Pi等）は`volumes: - ./data:/data`のホスト側パスが存在しないとbind mountに失敗して起動できないことがあるため、`git clone`した時点で`data/`が必ず存在するようにしている。`data/`配下の実ファイル（`monitor.db`・`state/settings.db`）は`.gitignore`で引き続き除外
 - テストは`cargo test`で走る単体テストだけ（`watch.rs`の判定・`ai.rs`の指示文の選び分け）。
-  **外との繋がり（Pi-hole・Chiezo・CLIブリッジ）は覆っていない**ので、そこの動作確認は
+  **外との繋がり（Pi-hole・Chiezo・Claude CodeのCLI）は覆っていない**ので、そこの動作確認は
   起動して`/api/*`をcurlで叩いて行っている

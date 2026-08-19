@@ -9,7 +9,7 @@
 //! | 相手 | 誰か | 認証 |
 //! |---|---|---|
 //! | Chiezo(LAN 内の知識サーバー) | Chiezo に登録してある全部(Claude Code / Codex / …) | 要らない(鍵はあちら) |
-//! | CLI ブリッジ(サイドカー) | Claude Code だけ | `claude setup-token` のトークン |
+//! | 同梱の CLI(`claude.rs`) | Claude Code だけ | `claude setup-token` のトークン |
 //!
 //! **指示文は相手で変えない。** 相手を変えたときに変わるのは書き手だけで、
 //! 聞いていることが変わってしまうと読み比べにならない。
@@ -32,12 +32,16 @@ const SELECTIONS_KEY: &str = "ai:selections";
 /// 移さないと、更新した環境で選び直しを求めることになる。
 const LEGACY_SELECTION_KEY: &str = "ai:selection";
 
-/// CLI ブリッジを指す予約された識別子。**`local:` を冠する** ——
+/// 同梱の CLI を指す予約された識別子。**`local:` を冠する** ——
 /// Chiezo の相手の id(`claude`・`codex` 等)にコロンは使われないので、混ざらない。
-pub const BRIDGE_BACKEND: &str = "local:bridge";
+pub const CLI_BACKEND: &str = "local:cli";
 
-/// CLI ブリッジ経由のときに画面へ出す名前。
-pub const BRIDGE_LABEL: &str = "Claude Code(CLIブリッジ)";
+/// サイドカー(chiezo-bridge)へ追い出していた頃の識別子。**読むときだけ受ける** ——
+/// 保存済みの選択がこの値のままなので、落とすと「選んでいたのに未選択に戻る」。
+const LEGACY_CLI_BACKEND: &str = "local:bridge";
+
+/// 同梱の CLI が相手のときに画面へ出す名前。
+pub const CLI_LABEL: &str = "Claude Code(同梱のCLI)";
 
 /// どちらの一覧について聞いているか。**指示文はこれで変える。**
 ///
@@ -165,7 +169,7 @@ pub const MAX_DOMAINS_PER_ASK: usize = 10;
 /// 選んだ相手1人。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiChoice {
-    /// Chiezo 側の識別子(`claude` など)、または [`BRIDGE_BACKEND`]。
+    /// Chiezo 側の識別子(`claude` など)、または [`CLI_BACKEND`]。
     /// **突き合わせはこれで行う**。
     pub backend: String,
     /// 画面に出す名前。**選んだ時点の表記を持つ** —— 表示のたびに Chiezo へ
@@ -186,16 +190,16 @@ pub struct AiChoice {
 }
 
 impl AiChoice {
-    /// CLI ブリッジ(このアプリが直に話す相手)か。
-    pub fn is_bridge(&self) -> bool {
-        self.backend == BRIDGE_BACKEND
+    /// 同梱の CLI(このアプリが自分で起動する相手)か。
+    pub fn is_cli(&self) -> bool {
+        self.backend == CLI_BACKEND
     }
 
-    /// CLI ブリッジを指す選択。
-    pub fn bridge() -> Self {
+    /// 同梱の CLI を指す選択。
+    pub fn cli() -> Self {
         Self {
-            backend: BRIDGE_BACKEND.to_string(),
-            label: BRIDGE_LABEL.to_string(),
+            backend: CLI_BACKEND.to_string(),
+            label: CLI_LABEL.to_string(),
             model: None,
             effort: None,
             primary: true,
@@ -205,6 +209,20 @@ impl AiChoice {
     /// 画面に出す表記。モデルまで出す —— どの枠を使ったのかが分かるように。
     pub fn display_name(&self) -> String {
         name_with_model(&self.label, self.model.as_deref())
+    }
+}
+
+/// サイドカー(chiezo-bridge)へ追い出していた頃の選択を、いまの識別子へ読み替える。
+/// **表記も今のものに差し替える** —— 保存されているのは「Claude Code(CLIブリッジ)」で、
+/// 読み替えないと、もう居ないものの名前が画面にもメモの書き手にも出続ける。
+/// メインかどうかだけは保存されたものを保つ(選び直しを求めないため)。
+fn renamed_cli(choice: AiChoice) -> AiChoice {
+    if choice.backend != LEGACY_CLI_BACKEND {
+        return choice;
+    }
+    AiChoice {
+        primary: choice.primary,
+        ..AiChoice::cli()
     }
 }
 
@@ -251,7 +269,7 @@ pub struct Answer {
 /// 「AIに聞く」の失敗理由。
 pub enum AskError {
     /// トークンが未保存、または認証エラーだった。フロントにトークン入力を促させる
-    /// (**CLI ブリッジが相手のときだけ起きる** —— Chiezo は鍵を自分で持っている)
+    /// (**同梱の CLI が相手のときだけ起きる** —— Chiezo は鍵を自分で持っている)
     TokenRequired,
     /// それ以外の失敗。文字列はそのまま画面に出す
     Failed(String),
@@ -318,7 +336,8 @@ impl Ai {
         choices
             .into_iter()
             .filter(|choice| !choice.backend.trim().is_empty())
-            .filter(|choice| choice.is_bridge() || self.chiezo.is_some())
+            .map(renamed_cli)
+            .filter(|choice| choice.is_cli() || self.chiezo.is_some())
             .collect()
     }
 
@@ -327,7 +346,7 @@ impl Ai {
         serde_json::from_str::<AiChoice>(&raw).ok()
     }
 
-    /// 実際に聞く相手。**空なら CLI ブリッジ** —— 何も選んでいない状態でも
+    /// 実際に聞く相手。**空なら同梱の CLI** —— 何も選んでいない状態でも
     /// 従来どおり動く(Chiezo を使わない環境がそれ)。
     ///
     /// **メインを先頭にそろえる。** この並びがそのまま2か所に出る ——
@@ -338,7 +357,7 @@ impl Ai {
     async fn targets(&self) -> Vec<AiChoice> {
         let selections = self.selections().await;
         if selections.is_empty() {
-            return vec![AiChoice::bridge()];
+            return vec![AiChoice::cli()];
         }
         let mut targets = selections;
         // 安定な並べ替え。メインが立っていなければ何も動かない(先頭がそのまま先頭)
@@ -346,7 +365,7 @@ impl Ai {
         targets
     }
 
-    /// **「詳しく調べる」を頼む1人。** 立っていなければ先頭、選択が空なら CLI ブリッジ。
+    /// **「詳しく調べる」を頼む1人。** 立っていなければ先頭、選択が空なら同梱の CLI。
     ///
     /// **必ず1人に決まる。** 決まらないと「押したのに誰も答えない」が起きるし、
     /// 全員に投げると web 検索ぶんの時間と枠が人数倍になる。
@@ -361,7 +380,7 @@ impl Ai {
         self.primary_target().await.backend
     }
 
-    /// 選択を保存する。空なら CLI ブリッジ経由に戻す。
+    /// 選択を保存する。空なら同梱の CLI に戻す。
     pub async fn select(&self, choices: &[AiChoice]) -> anyhow::Result<()> {
         let value = if choices.is_empty() {
             None
@@ -478,9 +497,9 @@ impl Ai {
         user_prompt: &str,
         domains: &[String],
     ) -> Result<(String, Vec<(String, String)>), AskError> {
-        let (text, author) = if target.is_bridge() {
+        let (text, author) = if target.is_cli() {
             let text = self.claude.ask(system_prompt, user_prompt).await?;
-            (text, BRIDGE_LABEL.to_string())
+            (text, CLI_LABEL.to_string())
         } else {
             // **Chiezo が未設定なら選択から落としてある**ので、ここに来るのは設定済みのとき
             let Some(chiezo) = self.chiezo.as_ref() else {
@@ -610,12 +629,12 @@ impl Ai {
         system_prompt: &'static str,
         user_prompt: &str,
     ) -> Result<(String, String), AskError> {
-        let (text, author) = if target.is_bridge() {
+        let (text, author) = if target.is_cli() {
             let text = self
                 .claude
                 .ask_within(system_prompt, user_prompt, self.investigate_timeout)
                 .await?;
-            (text, BRIDGE_LABEL.to_string())
+            (text, CLI_LABEL.to_string())
         } else {
             let Some(chiezo) = self.chiezo.as_ref() else {
                 return Err(AskError::Failed("Chiezo の URL が未設定です".to_string()));
@@ -645,13 +664,13 @@ impl Ai {
         Ok((author, text.to_string()))
     }
 
-    /// CLI ブリッジ用のトークンが保存されているか。**値は返さない** ——
+    /// 同梱の CLI 用のトークンが保存されているか。**値は返さない** ——
     /// 画面が出すのは「登録済みか」だけでよい。
     pub fn has_token(&self) -> bool {
         self.claude.load_token().is_some()
     }
 
-    /// `claude setup-token` のトークンを保存する(CLI ブリッジが相手のときだけ要る)。
+    /// `claude setup-token` のトークンを保存する(同梱の CLI が相手のときだけ要る)。
     pub fn save_token(&self, token: &str) -> anyhow::Result<()> {
         self.claude.save_token(token)
     }

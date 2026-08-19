@@ -28,17 +28,11 @@
 # ——こちらは値の直書きぶん古くなりやすい。
 
 # ---- ここだけ編集: データの置き場(ホストの絶対パス) ----
-# SQLite(monitor.db)と、CLIブリッジと共有する設定(state/settings.db)が入る。
+# SQLite(monitor.db)と、トークン等の設定(state/settings.db)が入る。
 # 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
 # 先に作っておくのが確実。所有者合わせは起動時に pihole-monitor-init がやるので、
 # `chown` を手で打つ必要はない。
 x-data-dir: &data-dir "/path/to/pihole-monitor/data"
-
-# ---- ここだけ編集: 上の置き場の下の state ディレクトリ ----
-# CLIブリッジと共有する設定(settings.db)の置き場。**上の値 + /state** を書く
-# (YAMLのアンカーは文字列の一部に差し込めないため2行に分けてある)。
-# 中身は本体が書き、ブリッジは読み取り専用で読む
-x-state-dir: &state-dir "/path/to/pihole-monitor/data/state"
 
 # ---- ここだけ編集: 実行ユーザー ----
 # ホスト側でこのディレクトリを読み書きするユーザーの `id -u`:`id -g`。
@@ -58,13 +52,11 @@ x-app-env: &app-env
   PIHOLE_PASSWORD: ""
   # 取得するブロッククエリの件数(-1で全件)
   PIHOLE_QUERY_LIMIT: "-1"
-  # 「AIに聞く」でCLIブリッジ(Claude Code)に頼むときの1回あたりのタイムアウト秒数
+  # 「AIに聞く」で同梱のClaude CodeのCLIに頼むときの1回あたりのタイムアウト秒数
   CLAUDE_TIMEOUT: "60"
-  # CLIを動かすサイドカー。ホストへは公開していないのでサービス名で呼ぶ
-  CLAUDE_BRIDGE_URL: "http://bridge:7013/v1"
   # ---- ここだけ編集(任意): Chiezo(LAN内の知識サーバー)の**ルートURL** ----
   # 入れると、聞く相手(Claude Code / Codex / …)を画面から選べる。鍵はChiezoが持っている。
-  # 使わないなら空文字("")——従来どおりCLIブリッジだけで動く。
+  # 使わないなら空文字("")——同梱のClaude CodeのCLIだけで動く。
   # **`/v1` は付けない**(こちらが `/v1/ai/...` を足すので、付けると404になる)。
   # 値は「**このコンテナから**Chiezoに届くアドレス」——別のホストならそのIP、
   # 同じホストならLANのIP(`localhost` はコンテナ自身を指すので不可)。
@@ -84,7 +76,7 @@ x-app-env: &app-env
 #
 # 注意:
 # - **`networks:` を書くと既定のネットワークに自動で入らなくなる。** `default` を並べ忘れると
-#   bridge にも繋がらなくなり、「AIに聞く」がどちらの経路でも動かなくなる
+#   Pi-hole など外への通信ごと届かなくなる
 # - **ネットワーク名は環境で変わる。** `<プロジェクト名>_default` で、プロジェクト名は
 #   管理画面で付けたスタック名。`docker network ls` で実物を確認する
 # - `external: true` は**そのネットワークが既に在ること**が前提。Chiezoを同じホストで
@@ -127,32 +119,6 @@ services:
     # ファイル末尾の networks: を有効にする(**default も必ず並べる**)
     #networks: [default, chiezo]
     restart: unless-stopped
-
-  # 「AIに聞く」でCLIブリッジを使うときのサイドカー(chiezoリポジトリの**公開**イメージ。
-  # これだけは docker login 無しでpullできる)。**本体はCLIを持たない**。
-  # **ホストへポートを公開しない** —— 認証が無いうえにトークンを読めるため。
-  # 認証情報は state/settings.db 経由で渡す(画面から入れたトークンを本体が書く)
-  bridge:
-    image: ghcr.io/rtcode337/chiezo-bridge:latest
-    container_name: pihole-monitor-bridge
-    depends_on:
-      pihole-monitor-init:
-        condition: service_completed_successfully
-    volumes:
-      # **読み取り専用**。ブリッジは書かない
-      - type: bind
-        source: *state-dir
-        target: /state
-        read_only: true
-    environment:
-      CHIEZO_BRIDGE_CLI: "claude"
-      # MCPは繋がない(渡すのは自前のプロンプトのため)
-      CHIEZO_BRIDGE_MCP_URL: ""
-      CHIEZO_BRIDGE_TIMEOUT: "60"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:7013/health"]
-      interval: 60s
 
 # Chiezoのネットワークに相乗りするときだけ有効にする(上の pihole-monitor の
 # networks: と対で使う)。**name は環境で変わる**ので docker network ls で確かめること

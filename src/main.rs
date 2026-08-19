@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
         pihole_base_url = %config.pihole_base_url,
         query_limit = config.pihole_query_limit,
         db_path = %config.db_path.display(),
-        // 空なら「聞く相手は Claude Code(CLI ブリッジ)固定」の意味
+        // 空なら「聞く相手は同梱の Claude Code CLI 固定」の意味
         chiezo_base_url = %config.chiezo_base_url,
         "設定を読み込んだ"
     );

@@ -67,7 +67,7 @@ classDiagram
         +complete() 1往復（webの可否つき）
     }
     class ClaudeClient {
-        +ask_within() CLIブリッジへ
+        +ask_within() 同梱のCLIを起動
         +load_token()
     }
 

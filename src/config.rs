@@ -15,8 +15,8 @@ use std::time::Duration;
 /// (ERR_UNSAFE_PORT)。かつて6001を使っていたのはこれを避けるためだった。
 pub const PORT: u16 = 7060;
 
-/// CLI ブリッジの応答がこれらを含んでいたら認証エラーとみなし、
-/// 保存済みトークンを破棄して再入力を促す(CLI 自身の認証エラーは 502 の本文に出る)。
+/// CLI の出力がこれらを含んでいたら認証エラーとみなし、
+/// 保存済みトークンを破棄して再入力を促す。
 pub const AUTH_ERROR_KEYWORDS: &[&str] = &[
     "invalid api key",
     "invalid bearer token",
@@ -45,8 +45,12 @@ pub struct Config {
     pub pihole_query_limit: i64,
     pub claude_timeout: Duration,
     pub db_path: PathBuf,
-    /// CLI ブリッジ(chiezo-bridge)の URL。OpenAI 互換の口の根元まで。
-    pub claude_bridge_url: String,
+    /// Claude Code の CLI。**イメージに同梱してある**ので既定はコマンド名のまま。
+    /// 開発ホストで別の場所に入れているときだけ差し替える。
+    pub claude_executable: String,
+    /// CLI に使わせるモデル。**空なら CLI の既定**(サイドカー経由だった頃と同じ)。
+    /// 枠を抑えたいときに `sonnet` のような別名を渡せるようにしてある。
+    pub claude_model: String,
     /// Chiezo(LAN 内の知識サーバー)の**ルート URL**。空なら使わない。
     /// **`/v1` は付けない** —— 呼ぶ側が `/v1/ai/...` を足す。
     pub chiezo_base_url: String,
@@ -54,11 +58,12 @@ pub struct Config {
     /// web 検索を伴うので、1〜2文のメモを書かせるのとは桁が違う。
     pub investigate_timeout: Duration,
     /// Chiezo 越しの1回の生成の上限。相手は CLI や大きいモデルなので、
-    /// **ブリッジ経由(`claude_timeout`)より長めの既定にしてある**。
+    /// **同梱の CLI(`claude_timeout`)より長めの既定にしてある**。
     pub chiezo_timeout: Duration,
-    /// ブリッジと共有するディレクトリ。ここに設定 DB を書き、ブリッジが読み取り専用で読む。
+    /// 設定の置き場。トークンの設定 DB と、CLI に使わせるホームがここに入る。
+    /// **`DATA_DIR` の下**なので、丸ごとコピーすればバックアップになる。
     pub state_dir: PathBuf,
-    /// CLI を同梱していた頃のトークンの置き場(移行のためだけに残している)。
+    /// トークンをファイルで持っていた頃の置き場(移行のためだけに残している)。
     pub claude_token_path: PathBuf,
 
     // ---- DNSの取り込み(ingest.rs) ----
@@ -80,7 +85,7 @@ impl Config {
         // コンテナでは /data を永続化ボリュームにマウントする。
         // ホストで直接動かして開発するときは DATA_DIR=./data のように上書きする
         let data_dir = PathBuf::from(env_string("DATA_DIR", "/data"));
-        // ブリッジと共有する場所。既定はデータの置き場の下 ——
+        // 設定の置き場。既定はデータの置き場の下 ——
         // バックアップ(data/ を丸ごとコピー)に一緒に乗るようにするため
         let state_dir = match env_string("STATE_DIR", "") {
             raw if !raw.trim().is_empty() => PathBuf::from(raw),
@@ -104,9 +109,8 @@ impl Config {
             pihole_query_limit: env_parse("PIHOLE_QUERY_LIMIT", -1),
             claude_timeout: Duration::from_secs(env_parse("CLAUDE_TIMEOUT", 60)),
             db_path: data_dir.join("monitor.db"),
-            claude_bridge_url: env_string("CLAUDE_BRIDGE_URL", "http://bridge:7013/v1")
-                .trim_end_matches('/')
-                .to_string(),
+            claude_executable: env_string("CLAUDE_EXECUTABLE", "claude"),
+            claude_model: env_string("CLAUDE_MODEL", "").trim().to_string(),
             chiezo_base_url: env_string("CHIEZO_BASE_URL", "")
                 .trim()
                 .trim_end_matches('/')

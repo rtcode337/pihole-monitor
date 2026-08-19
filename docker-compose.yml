@@ -31,20 +31,23 @@ services:
     user: root
     volumes:
       - ./data:/data
-    # state/ はCLIブリッジと共有する(bridgeが読み取り専用でマウントする)。
-    # ここで先に作っておかないと、bridgeのマウントでDockerがroot所有で作ってしまう
+    # state/ にはトークンの設定DBとClaude CodeのCLIのホームが入る。
+    # 先に作っておかないと、非rootの本体が作れずにトークンを保存できない
     entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
     restart: "no"
 
-  # 「AIに聞く」でChiezo(LAN内の知識サーバー)を使うときの接続先は .env の CHIEZO_BASE_URL。
+  # 「AIに聞く」は**このコンテナが同梱のClaude CodeのCLIを起動する**(サイドカーは要らない)。
+  # トークンは画面から入れると data/state/settings.db に保存される。
+  #
+  # Chiezo(LAN内の知識サーバー)越しに他のAIも選べる。接続先は .env の CHIEZO_BASE_URL。
   # **同じホストでChiezoが動いているのに届かないとき**は、コンテナからホストの公開ポートへ
   # 戻る経路が塞がれている可能性がある(NASのファイアウォール等)。その場合はChiezoの
   # ネットワークに相乗りしてサービス名で呼ぶ —— **やることは下の networks: と
   # ファイル末尾の networks: のコメントを外し、CHIEZO_BASE_URL を
   # http://chiezo-api:7010 にするだけ**(chiezo-api はコンテナ名なので、相手の
   # プロジェクト名が何でもこの名前で引ける)。
-  # **`networks:` を書くと既定のネットワークに自動で入らなくなる** —— `default` を並べ忘れると
-  # bridge にも繋がらなくなる(「AIに聞く」がどちらの経路でも動かなくなる)
+  # **`networks:` を書くと既定のネットワークに自動で入らなくなる** —— `default` を
+  # 並べ忘れると、Pi-hole など外への通信ごと届かなくなる
 
   pihole-monitor:
     depends_on:
@@ -64,41 +67,13 @@ services:
       # 所有者は pihole-monitor-init が起動前に揃える
       - ./data:/data
     # data/ に書かれるファイルをホストのユーザー所有にする。イメージ内の既定は
-    # uid/gid 1000(nodeユーザー)。`id -u` が1000以外のホストでは
+    # uid/gid 1000。`id -u` が1000以外のホストでは
     # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
     user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
     # Chiezoがホストの公開ポート経由で届かないときだけ、次の1行と
     # ファイル末尾の networks: を有効にする(**default も必ず並べる**)
     #networks: [default, chiezo]
     restart: unless-stopped
-
-  # 「AIに聞く」でCLIブリッジを使うときのサイドカー(chiezoリポジトリのイメージ)。
-  # **本体はCLIを持たない** —— イメージから150MB近くを外せる。
-  #
-  # **ホストへポートを公開しない。** 認証が無いうえにトークンを読めるので、
-  # 外から触れるとそのままAIを使われる。呼ぶのは同じcomposeネットワークの本体だけ。
-  #
-  # 認証情報は data/state/settings.db 経由で渡す(画面から入れたトークンを本体が書く)。
-  # MCPは繋がない —— 渡すのは自前のプロンプトで、知識ベースを引かせる用途ではない
-  bridge:
-    # **公開パッケージ**なので docker login は要らない(本体のイメージだけが非公開)
-    image: ${BRIDGE_IMAGE:-ghcr.io/rtcode337/chiezo-bridge:latest}
-    container_name: pihole-monitor-bridge
-    depends_on:
-      pihole-monitor-init:
-        condition: service_completed_successfully
-    volumes:
-      # **読み取り専用**。ブリッジは書かない
-      - ./data/state:/state:ro
-    environment:
-      - CHIEZO_BRIDGE_CLI=claude
-      - CHIEZO_BRIDGE_MCP_URL=
-      # 1回の上限は要求ごとに送るので、ここは保険の既定値(CLAUDE_TIMEOUT と同じ値にする)
-      - CHIEZO_BRIDGE_TIMEOUT=${CLAUDE_TIMEOUT:-60}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:7013/health"]
-      interval: 60s
 
 # Chiezoのネットワークに相乗りするときだけ有効にする(上の pihole-monitor の
 # networks: と対で使う)。`external: true` は**そのネットワークが既に在ること**が前提なので、
