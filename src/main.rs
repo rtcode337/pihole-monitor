@@ -39,7 +39,6 @@ async fn main() -> Result<()> {
     let config = Config::from_env();
     tracing::info!(
         pihole_base_url = %config.pihole_base_url,
-        query_limit = config.pihole_query_limit,
         db_path = %config.db_path.display(),
         // 空なら「聞く相手は同梱の Claude Code CLI 固定」の意味
         chiezo_base_url = %config.chiezo_base_url,
@@ -55,7 +54,7 @@ async fn main() -> Result<()> {
         pihole_web_url: config.pihole_web_url.clone(),
     };
 
-    // DNSの取り込みは**別タスクで回し続ける**(画面の応答を待たせない)。
+    // DNSの取り込みは別タスクで回し続ける(画面の応答を待たせない)。
     // 失敗しても中で握って続けるので、ここでは投げっぱなしでよい
     tokio::spawn(ingest::run(
         state.db.clone(),

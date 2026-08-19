@@ -1,4 +1,4 @@
-//! Pi-hole v6 REST APIとの連携。**参照のみで、Pi-holeの設定は変更しない。**
+//! Pi-hole v6 REST APIとの連携。参照のみで、Pi-holeの設定は変更しない。
 //!
 //! リクエストごとに `POST /api/auth` でセッショントークン(sid)を取り、
 //! それを使って `GET /api/queries` を1回叩く(1リクエストあたり計2コール)。
@@ -17,12 +17,11 @@ pub struct PiholeClient {
     http: reqwest::Client,
     base_url: String,
     password: String,
-    query_limit: i64,
     /// 取ったセッション(sid)を使い回す。
     ///
-    /// **リクエストのたびに `POST /api/auth` してはいけない。** Pi-hole は同時セッション数に
+    /// リクエストのたびに `POST /api/auth` してはいけない。 Pi-hole は同時セッション数に
     /// 上限があり(既定16。`webserver.api.max_sessions`)、超えると認証そのものが
-    /// `api_seats_exceeded` で断られて**取り込みが丸ごと止まる**。遡り取り込みは1回で
+    /// `api_seats_exceeded` で断られて取り込みが丸ごと止まる。遡り取り込みは1回で
     /// 30日ぶん叩くので、作り直していると即座に上限に当たる(実際に踏んだ)。
     session: Arc<Mutex<Option<String>>>,
 }
@@ -80,7 +79,7 @@ struct Client {
     ip: Option<String>,
 }
 
-/// 取り込んで DB に入れるクエリ1件。**Pi-hole の `id` をそのまま主キーにする** ——
+/// 取り込んで DB に入れるクエリ1件。Pi-hole の `id` をそのまま主キーにする ——
 /// 取りこぼしを防ぐために窓を重ねて取るので、重複を弾く手立てが要る。
 #[derive(Debug, Clone)]
 pub struct QueryRecord {
@@ -97,7 +96,7 @@ pub struct QueryRecord {
 
 /// ドメイン1件の期間集計(`GET /api/stats/database/top_domains`)。
 ///
-/// **遡り取り込みはこちらを使う。** 生のクエリを引くと30日で136万件になるが、
+/// 遡り取り込みはこちらを使う。 生のクエリを引くと30日で136万件になるが、
 /// この口なら1日ぶんが約60KB・1リクエストで済む(実測: 1,306ドメイン)。
 /// 1回しか出ていないドメインも省略されずに入る。
 #[derive(Debug, Clone)]
@@ -119,7 +118,7 @@ struct TopDomain {
     count: i64,
 }
 
-/// `GET /api/queries` が1回に返す上限。**`length=-1` を渡しても超えられない**
+/// `GET /api/queries` が1回に返す上限。`length=-1` を渡しても超えられない
 /// (実測: 46,939件ある日に -1 で 10,000件しか返らなかった)。
 /// これを超えるぶんは `start` でページを送る。
 const MAX_ROWS_PER_REQUEST: i64 = 10_000;
@@ -139,7 +138,6 @@ impl PiholeClient {
             http,
             base_url: config.pihole_base_url.clone(),
             password: config.pihole_password.clone(),
-            query_limit: config.pihole_query_limit,
             session: Arc::new(Mutex::new(None)),
         })
     }
@@ -165,7 +163,7 @@ impl PiholeClient {
         *self.session.lock().unwrap_or_else(|p| p.into_inner()) = sid;
     }
 
-    /// GET を1本投げる。**401 が返ったらセッションを取り直して1回だけやり直す** ——
+    /// GET を1本投げる。401 が返ったらセッションを取り直して1回だけやり直す ——
     /// Pi-hole 側の期限切れ(既定30分)や再起動で、覚えている sid は黙って無効になる。
     async fn get_json<T: DeserializeOwned>(
         &self,
@@ -216,13 +214,16 @@ impl PiholeClient {
     }
 
     /// ブロック済みクエリを取得し、ドメインごとの件数にまとめて返す。
-    pub async fn blocked_domains(&self) -> Result<HashMap<String, u32>> {
+    ///
+    /// 件数(`limit`)は呼ぶ側から渡す。 画面から変えられる設定なので、
+    /// 起動時に固定すると入れ替えても再起動するまで効かない(`-1` で全件)。
+    pub async fn blocked_domains(&self, limit: i64) -> Result<HashMap<String, u32>> {
         let resp: QueriesResponse = self
             .get_json(
                 "/api/queries",
                 &[
                     ("upstream", "blocklist".to_string()),
-                    ("length", self.query_limit.to_string()),
+                    ("length", limit.to_string()),
                 ],
                 "ブロック済みクエリ",
             )
@@ -239,7 +240,7 @@ impl PiholeClient {
 
     /// `since` 以降のクエリを新しい順に取り込む(ページを送って集める)。
     ///
-    /// **窓は少し重ねて渡すこと**(呼び出し側が `since` を巻き戻す)。Pi-hole 側の記録は
+    /// 窓は少し重ねて渡すこと(呼び出し側が `since` を巻き戻す)。Pi-hole 側の記録は
     /// 時刻順に確定するとは限らず、境界ぴったりで切ると取りこぼす。重複は `id` で弾く。
     pub async fn queries_since(&self, since: f64) -> Result<Vec<QueryRecord>> {
         let mut out: Vec<QueryRecord> = Vec::new();
@@ -277,10 +278,10 @@ impl PiholeClient {
 
     /// 期間内のドメインごとの件数。遡り取り込み(`DomainCount` のコメント参照)で使う。
     ///
-    /// **許可されたぶんとブロックされたぶんを両方引いて合わせる。** 既定の応答は
+    /// 許可されたぶんとブロックされたぶんを両方引いて合わせる。 既定の応答は
     /// 許可されたドメインだけで、`blocked=true` を付けたときだけブロック済みが返る ——
-    /// 片方だけだと、**ブロックされているドメインが「遡りでは見なかった」ことになり、
-    /// 生の取り込みが最初に拾った瞬間に「初出」として挙がってくる**(実際に
+    /// 片方だけだと、ブロックされているドメインが「遡りでは見なかった」ことになり、
+    /// 生の取り込みが最初に拾った瞬間に「初出」として挙がってくる(実際に
     /// mask.icloud.com と api3.siftscience.com がそうなった)。
     pub async fn domain_counts(&self, from: i64, until: i64) -> Result<Vec<DomainCount>> {
         let mut out: Vec<DomainCount> = Vec::new();
@@ -291,7 +292,7 @@ impl PiholeClient {
                     &[
                         ("from", from.to_string()),
                         ("until", until.to_string()),
-                        // 件数で切らない。**上位N件にすると、1回しか出ていないドメインが落ちる**
+                        // 件数で切らない。上位N件にすると、1回しか出ていないドメインが落ちる
                         // —— 初出の判定はまさにそこを見るので、切ると意味が無くなる
                         ("count", "1000000".to_string()),
                         ("blocked", blocked.to_string()),
@@ -313,7 +314,7 @@ impl PiholeClient {
     }
 }
 
-/// 応答の1件を取り込み用の形に直す。**id・時刻・ドメインが欠けている行は捨てる** ——
+/// 応答の1件を取り込み用の形に直す。id・時刻・ドメインが欠けている行は捨てる ——
 /// 主キーにも並べ替えにも使うので、無い行を入れても後段が扱えない。
 fn record_of(q: Query) -> Option<QueryRecord> {
     let domain = q.domain.filter(|d| !d.is_empty())?;

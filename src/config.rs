@@ -6,11 +6,11 @@ use std::time::Duration;
 
 /// リッスンするポート。
 ///
-/// **7000番台に10刻みで割り当てる運用**(末尾0 = ブラウザで開くもの)に合わせた
+/// 7000番台に10刻みで割り当てる運用(末尾0 = ブラウザで開くもの)に合わせた
 /// pihole-monitor の枠。ホスト側とコンテナ内で同じ番号にしてある ——
 /// composeの `"7060:7060"` を読むだけで対応が分かるようにするため。
 ///
-/// **6000番台は使わない。** 6000はX11用に予約されており、主要ブラウザ
+/// 6000番台は使わない。 6000はX11用に予約されており、主要ブラウザ
 /// (Chrome/Firefox/Safari)が「安全でないポート」として接続を拒否する
 /// (ERR_UNSAFE_PORT)。かつて6001を使っていたのはこれを避けるためだった。
 pub const PORT: u16 = 7060;
@@ -33,49 +33,47 @@ pub const AUTH_ERROR_KEYWORDS: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct Config {
     pub pihole_base_url: String,
-    /// Pi-hole の**管理画面**の URL(末尾の `/` は落とす)。理由の札から、その通信だけを
+    /// Pi-hole の管理画面の URL(末尾の `/` は落とす)。理由の札から、その通信だけを
     /// 絞り込んだクエリログ(`/admin/queries.lp?...`)へ飛ばすのに使う。
     ///
-    /// **API の URL とは別に持てる。** リンクを開くのは**ブラウザ**なので、
+    /// API の URL とは別に持てる。 リンクを開くのはブラウザなので、
     /// コンテナの中からしか引けない名前(`http://pihole:80`)のままだと LAN の端末では開けない。
     /// 未設定なら `pihole_base_url` をそのまま使う(同じホストなら追加設定は要らない)。
     pub pihole_web_url: String,
     pub pihole_password: String,
-    /// 取得するブロッククエリの件数。-1で全件(Pi-hole v6 APIの `length` パラメータ)
-    pub pihole_query_limit: i64,
     pub claude_timeout: Duration,
     pub db_path: PathBuf,
-    /// Claude Code の CLI。**イメージに同梱してある**ので既定はコマンド名のまま。
+    /// Claude Code の CLI。イメージに同梱してあるので既定はコマンド名のまま。
     /// 開発ホストで別の場所に入れているときだけ差し替える。
     pub claude_executable: String,
-    /// CLI に使わせるモデル。**空なら CLI の既定**(サイドカー経由だった頃と同じ)。
+    /// CLI に使わせるモデル。空なら CLI の既定(サイドカー経由だった頃と同じ)。
     /// 枠を抑えたいときに `sonnet` のような別名を渡せるようにしてある。
     pub claude_model: String,
-    /// Chiezo(LAN 内の知識サーバー)の**ルート URL**。空なら使わない。
-    /// **`/v1` は付けない** —— 呼ぶ側が `/v1/ai/...` を足す。
+    /// Chiezo(LAN 内の知識サーバー)のルート URL。空なら使わない。
+    /// `/v1` は付けない —— 呼ぶ側が `/v1/ai/...` を足す。
     pub chiezo_base_url: String,
-    /// 「詳しく調べる」1回の上限。**通常の問い合わせよりずっと長い** ——
+    /// 「詳しく調べる」1回の上限。通常の問い合わせよりずっと長い ——
     /// web 検索を伴うので、1〜2文のメモを書かせるのとは桁が違う。
     pub investigate_timeout: Duration,
     /// Chiezo 越しの1回の生成の上限。相手は CLI や大きいモデルなので、
-    /// **同梱の CLI(`claude_timeout`)より長めの既定にしてある**。
+    /// 同梱の CLI(`claude_timeout`)より長めの既定にしてある。
     pub chiezo_timeout: Duration,
     /// 設定の置き場。トークンの設定 DB と、CLI に使わせるホームがここに入る。
-    /// **`DATA_DIR` の下**なので、丸ごとコピーすればバックアップになる。
+    /// `DATA_DIR` の下なので、丸ごとコピーすればバックアップになる。
     pub state_dir: PathBuf,
     /// トークンをファイルで持っていた頃の置き場(移行のためだけに残している)。
     pub claude_token_path: PathBuf,
 
     // ---- DNSの取り込み(ingest.rs) ----
-    /// 取り込みを回すか。**既定は有効** —— これが無いと「怪しい通信」の判定材料が貯まらない。
+    /// 取り込みを回すか。既定は有効 —— これが無いと「怪しい通信」の判定材料が貯まらない。
     pub dns_ingest_enabled: bool,
     /// 取り込みの周期。短くしても Pi-hole を叩く回数が増えるだけで、得られる情報は変わらない。
     pub dns_ingest_interval: Duration,
-    /// 生のクエリを何日ぶん残すか。**長くすると効くのは周期の検出だけ**で、
+    /// 生のクエリを何日ぶん残すか。長くすると効くのは周期の検出だけで、
     /// 初出の判定は `dns_domains` が受け持つので保持期間に関係なく効く。
     pub dns_retention_days: i64,
     /// 起動時に何日ぶん遡ってドメインの初出を埋めるか。
-    /// **0にすると「初日はすべてが初出」になる**ので、既定で30日ぶん遡る
+    /// 0にすると「初日はすべてが初出」になるので、既定で30日ぶん遡る
     /// (集計の口を使うので1日1リクエスト・約60KBで済む)。
     pub dns_backfill_days: i64,
 }
@@ -106,7 +104,6 @@ impl Config {
             pihole_base_url,
             pihole_web_url,
             pihole_password: env_string("PIHOLE_PASSWORD", ""),
-            pihole_query_limit: env_parse("PIHOLE_QUERY_LIMIT", -1),
             claude_timeout: Duration::from_secs(env_parse("CLAUDE_TIMEOUT", 60)),
             db_path: data_dir.join("monitor.db"),
             claude_executable: env_string("CLAUDE_EXECUTABLE", "claude"),
@@ -132,7 +129,7 @@ fn env_string(key: &str, default: &str) -> String {
 }
 
 /// 数値の環境変数を読む。空文字や解釈できない値はデフォルトに倒して起動を止めない
-/// (`.env` に `PIHOLE_QUERY_LIMIT=` のように書かれていても動かしたいため)。
+/// (`.env` に `DNS_RETENTION_DAYS=` のように書かれていても動かしたいため)。
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
     match env::var(key) {
         Ok(raw) => match raw.trim().parse() {

@@ -1,8 +1,8 @@
 //! Pi-hole のクエリを定期的に取り込んで SQLite に貯める。
 //!
-//! **「ブロックされていない怪しい通信」を見るための土台。** ブロック済みの一覧
+//! 「ブロックされていない怪しい通信」を見るための土台。 ブロック済みの一覧
 //! (`domain_notes`)は Pi-hole をその場で叩いて集計すれば済むが、こちらは
-//! 「いつもと違うか」を言うのが目的なので、**比較対象になる過去が要る**。
+//! 「いつもと違うか」を言うのが目的なので、比較対象になる過去が要る。
 //! Pi-hole 自身も長期DBを持っているものの、画面を開くたびに数万件をHTTPで
 //! 引き直すのは重いので、手元に写しを持つ。
 //!
@@ -13,7 +13,7 @@
 //! | 定期取り込み | 生のクエリ1件ずつ | 保持期間(既定7日) | 周期・種別・クライアント |
 //! | 遡り取り込み | 日ごとのドメイン集計 | ずっと(`dns_domains`) | 初出(はじめて見た日) |
 //!
-//! **遡りに生のクエリを使わない**のが要点。30日ぶんは実測で136万件あり、
+//! 遡りに生のクエリを使わないのが要点。30日ぶんは実測で136万件あり、
 //! 1リクエスト1万件の上限では136回のページ送りになる。集計の口
 //! (`/api/stats/database/top_domains`)なら1日ぶんが1リクエスト・約60KBで、
 //! しかも1回しか出ていないドメインも省略されずに入る(初出はまさにそこを見る)。
@@ -24,7 +24,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::pihole::PiholeClient;
 
-/// 取り込みの窓を重ねる幅(秒)。**境界ぴったりで切らない** ——
+/// 取り込みの窓を重ねる幅(秒)。境界ぴったりで切らない ——
 /// Pi-hole 側の記録が時刻順に確定するとは限らず、重ねないと取りこぼす。
 /// 重複は `dns_queries.id` が弾く。
 const OVERLAP_SECS: f64 = 60.0;
@@ -34,7 +34,7 @@ const OVERLAP_SECS: f64 = 60.0;
 /// ——足りないぶんは周回を重ねるうちに埋まる。
 const FIRST_RUN_LOOKBACK_SECS: f64 = 6.0 * 3600.0;
 
-/// 定期取り込みを回し続ける。**1回の失敗で止めない** ——
+/// 定期取り込みを回し続ける。1回の失敗で止めない ——
 /// Pi-hole の再起動やネットワークの瞬断で監視ごと死ぬのを避ける。
 pub async fn run(db: Db, pihole: PiholeClient, config: Config) {
     if !config.dns_ingest_enabled {
@@ -56,8 +56,8 @@ pub async fn run(db: Db, pihole: PiholeClient, config: Config) {
     loop {
         ticker.tick().await;
 
-        // **遡りは毎周回ためす。** 起動時に1回だけだと、そのとき Pi-hole が落ちていたり
-        // 認証が通らなかったりしたぶんが**再起動するまで永久に埋まらない**
+        // 遡りは毎周回ためす。 起動時に1回だけだと、そのとき Pi-hole が落ちていたり
+        // 認証が通らなかったりしたぶんが再起動するまで永久に埋まらない
         // (実際にセッション枠を使い切って踏んだ)。済んでいれば設定を1回読むだけで抜ける
         if let Err(e) = backfill(&db, &pihole, config.dns_backfill_days).await {
             tracing::warn!(error = ?e, "遡り取り込みに失敗した(次の周回でやり直す)");
@@ -85,7 +85,7 @@ async fn ingest_once(db: &Db, pihole: &PiholeClient, config: &Config) -> Result<
         return Ok(0);
     }
 
-    // **Pi-hole の DB が作り直されると id が振り直される。** そのままだと新しい行が
+    // Pi-hole の DB が作り直されると id が振り直される。 そのままだと新しい行が
     // 「見たことのある id」として弾かれ続け、静かに取り込みが止まる
     let max_incoming = records.iter().map(|r| r.id).max().unwrap_or(0);
     let max_known = db.max_query_id().await?;
@@ -101,7 +101,7 @@ async fn ingest_once(db: &Db, pihole: &PiholeClient, config: &Config) -> Result<
     let newest = records.iter().map(|r| r.ts).fold(f64::MIN, f64::max);
     let inserted = db.insert_queries(records).await?;
 
-    // **カーソルは実際に取れたところまでしか進めない**(now まで進めると、
+    // カーソルは実際に取れたところまでしか進めない(now まで進めると、
     // 取りこぼしたぶんを二度と取りに行かなくなる)
     if newest > f64::MIN {
         db.set_ingest_cursor(newest).await?;
@@ -118,7 +118,7 @@ async fn ingest_once(db: &Db, pihole: &PiholeClient, config: &Config) -> Result<
 
 /// 遡り取り込み。1日ずつ集計を引いて `dns_domains` の初出を埋める。
 ///
-/// **すでに終えた日数は覚えておき、設定を伸ばしたぶんだけ足す**(毎回30回叩かない)。
+/// すでに終えた日数は覚えておき、設定を伸ばしたぶんだけ足す(毎回30回叩かない)。
 async fn backfill(db: &Db, pihole: &PiholeClient, want_days: i64) -> Result<()> {
     let done = db.backfilled_days().await?;
     if done >= want_days {
@@ -130,7 +130,7 @@ async fn backfill(db: &Db, pihole: &PiholeClient, want_days: i64) -> Result<()> 
     let today_start = jst_day_start(now);
     tracing::info!(from_day = done + 1, to_day = want_days, "遡り取り込みを始める");
 
-    // 古い日から新しい日へ進める。**途中で落ちてもそこまでは記録する**ので、
+    // 古い日から新しい日へ進める。途中で落ちてもそこまでは記録するので、
     // 次の起動が続きから取る
     for day in (done + 1..=want_days).rev() {
         let start = today_start - day * 86_400;
@@ -169,7 +169,7 @@ fn unix_now() -> f64 {
 }
 
 /// その時刻が属する「日本時間の日」の 00:00 を unix秒で返す。
-/// **日付の境界は日本時間で数える**(UTCだと日本の朝9時までが前日に入る)。
+/// 日付の境界は日本時間で数える(UTCだと日本の朝9時までが前日に入る)。
 fn jst_day_start(ts: i64) -> i64 {
     const JST_OFFSET_SECS: i64 = 9 * 3600;
     (ts + JST_OFFSET_SECS).div_euclid(86_400) * 86_400 - JST_OFFSET_SECS
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn jst_day_start_uses_japan_boundary() {
-        // 2026-08-18 08:00 JST = 2026-08-17 23:00 UTC。**日本時間ではまだ18日**なので、
+        // 2026-08-18 08:00 JST = 2026-08-17 23:00 UTC。日本時間ではまだ18日なので、
         // その日の始まりは 2026-08-18 00:00 JST = 2026-08-17 15:00 UTC
         let t = 1_787_007_600; // 2026-08-18T08:00:00+09:00
         let start = jst_day_start(t);

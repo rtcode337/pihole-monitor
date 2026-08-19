@@ -9,7 +9,7 @@
 #
 # `.env` に PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-xxxxxxx を書けば
 # 特定のイメージを指定できる。
-# ※ GHCR には**最新の 1 版しか残らない**（push のたびに古い版を消してストレージの
+# ※ GHCR には最新の 1 版しか残らない（push のたびに古い版を消してストレージの
 #   無料枠を守っている。.github/workflows/build-and-push-image.yml）ので、
 #   過去のイメージへは戻せない。戻せるようにするなら、あちらの
 #   min-versions-to-keep を上げて残す世代を増やすこと。
@@ -36,17 +36,17 @@ services:
     entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
     restart: "no"
 
-  # 「AIに聞く」は**このコンテナが同梱のClaude CodeのCLIを起動する**(サイドカーは要らない)。
+  # 「AIに聞く」はこのコンテナが同梱のClaude CodeのCLIを起動する。
   # トークンは画面から入れると data/state/settings.db に保存される。
   #
   # Chiezo(LAN内の知識サーバー)越しに他のAIも選べる。接続先は .env の CHIEZO_BASE_URL。
-  # **同じホストでChiezoが動いているのに届かないとき**は、コンテナからホストの公開ポートへ
+  # 同じホストでChiezoが動いているのに届かないときは、コンテナからホストの公開ポートへ
   # 戻る経路が塞がれている可能性がある(NASのファイアウォール等)。その場合はChiezoの
-  # ネットワークに相乗りしてサービス名で呼ぶ —— **やることは下の networks: と
+  # ネットワークに相乗りしてサービス名で呼ぶ —— やることは下の networks: と
   # ファイル末尾の networks: のコメントを外し、CHIEZO_BASE_URL を
-  # http://chiezo-api:7010 にするだけ**(chiezo-api はコンテナ名なので、相手の
+  # http://chiezo-api:7010 にするだけ(chiezo-api はコンテナ名なので、相手の
   # プロジェクト名が何でもこの名前で引ける)。
-  # **`networks:` を書くと既定のネットワークに自動で入らなくなる** —— `default` を
+  # `networks:` を書くと既定のネットワークに自動で入らなくなる —— `default` を
   # 並べ忘れると、Pi-hole など外への通信ごと届かなくなる
 
   pihole-monitor:
@@ -57,9 +57,6 @@ services:
     build: .
     container_name: pihole-monitor
     ports:
-      # host:container。**7000番台に10刻みで割り当てる運用**の pihole-monitor 枠。
-      # 6000番台は使わない —— 6000はX11用の予約で、ブラウザが「安全でないポート」として
-      # 拒否する(ERR_UNSAFE_PORT)
       - "7060:7060"
     env_file:
       - .env
@@ -71,14 +68,14 @@ services:
     # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
     user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
     # Chiezoがホストの公開ポート経由で届かないときだけ、次の1行と
-    # ファイル末尾の networks: を有効にする(**default も必ず並べる**)
+    # ファイル末尾の networks: を有効にする(default も必ず並べる)
     #networks: [default, chiezo]
     restart: unless-stopped
 
 # Chiezoのネットワークに相乗りするときだけ有効にする(上の pihole-monitor の
-# networks: と対で使う)。`external: true` は**そのネットワークが既に在ること**が前提なので、
+# networks: と対で使う)。`external: true` はそのネットワークが既に在ることが前提なので、
 # Chiezoを同じホストで動かしていない環境で有効にすると本体が起動できなくなる。
-# **name は環境で変わる**(`<プロジェクト名>_default`)ので docker network ls で確かめること
+# name は環境で変わる(`<プロジェクト名>_default`)ので docker network ls で確かめること
 #networks:
 #  chiezo:
 #    external: true

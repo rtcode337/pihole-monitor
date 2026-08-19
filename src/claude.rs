@@ -1,17 +1,17 @@
 //! Claude Code CLI(`claude`)のヘッドレス実行とトークン管理。
 //!
-//! **Chiezo を使わないときの経路。** どの AI に聞くかを選べるのは Chiezo 越しのときだけで
+//! Chiezo を使わないときの経路。 どの AI に聞くかを選べるのは Chiezo 越しのときだけで
 //! (`chiezo.rs`)、Chiezo の URL が未設定か、相手を選んでいない場合はここが受け持つ。
 //!
-//! **CLI はこのイメージに同梱してある**(Dockerfile)。アプリが `claude -p` を
-//! プロセスとして起動する。**かつては別コンテナのサイドカー**(chiezo-bridge。Claude Code を
+//! CLI はこのイメージに同梱してある(Dockerfile)。アプリが `claude -p` を
+//! プロセスとして起動する。かつては別コンテナのサイドカー(chiezo-bridge。Claude Code を
 //! OpenAI 互換の口に見せるもの)へ HTTP で頼み、CLI をイメージから外していた ——
-//! 実体が大きくイメージが倍近くなるためだったが、**別コンテナを立てないと「AIに聞く」が
-//! 動かない**のは、置き場所の都合をそのまま利用者に負わせている。同梱なら compose を
+//! 実体が大きくイメージが倍近くなるためだったが、別コンテナを立てないと「AIに聞く」が
+//! 動かないのは、置き場所の都合をそのまま利用者に負わせている。同梱なら compose を
 //! 1つ起こすだけで動く。
 //!
 //! 認証は `claude setup-token` で発行した長期OAuthトークンを使う(ホストの `~/.claude` は
-//! マウントしない)。**渡し方は子プロセスの環境変数**(`CLAUDE_CODE_OAUTH_TOKEN`)——
+//! マウントしない)。渡し方は子プロセスの環境変数(`CLAUDE_CODE_OAUTH_TOKEN`)——
 //! このプロセス自身の環境変数は変えない(他の子プロセスへ漏らさないため)。
 //! 起動のたびに読むので、画面で入れ替えた値がそのまま次の問い合わせに効く。
 
@@ -30,11 +30,11 @@ use tokio::process::{Child, Command};
 use crate::ai::AskError;
 use crate::config::{AUTH_ERROR_KEYWORDS, Config};
 
-/// トークンを置く表の行。**サイドカーだった頃と同じ形のまま**にしてある ——
+/// トークンを置く表の行。サイドカーだった頃と同じ形のままにしてある ——
 /// 形を変えると、更新した環境でトークンの入れ直しを求めることになる。
 const PROVIDER: &str = "claude";
 
-/// 子プロセスの後始末を待つ上限。**SIGKILL の後なのですぐ終わる**。
+/// 子プロセスの後始末を待つ上限。SIGKILL の後なのですぐ終わる。
 const CHILD_WAIT: Duration = Duration::from_secs(2);
 
 /// トークンを置く表。
@@ -50,15 +50,15 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS provider_settings (
 #[derive(Clone)]
 pub struct ClaudeClient {
     executable: String,
-    /// 使わせるモデル。**空なら CLI の既定**(サイドカー経由だった頃と同じ)。
+    /// 使わせるモデル。空なら CLI の既定(サイドカー経由だった頃と同じ)。
     model: String,
     settings_path: PathBuf,
-    /// CLI を同梱していなかった頃のトークンの置き場。**初回に設定 DB へ移して消す**。
+    /// CLI を同梱していなかった頃のトークンの置き場。初回に設定 DB へ移して消す。
     legacy_token_path: PathBuf,
-    /// CLI に使わせるホーム。**イメージに固定のホームを持たせない** ——
+    /// CLI に使わせるホーム。イメージに固定のホームを持たせない ——
     /// 実行ユーザーはホストに合わせて変えられる(`PIHOLE_MONITOR_UID`)ので、
-    /// 書ける場所は永続化した置き場の下に作る。**作業ディレクトリも兼ねる**:
-    /// 開発ホストでそのまま起動すると、CLI が**リポジトリの `CLAUDE.md` を読んで**
+    /// 書ける場所は永続化した置き場の下に作る。作業ディレクトリも兼ねる:
+    /// 開発ホストでそのまま起動すると、CLI がリポジトリの `CLAUDE.md` を読んで
     /// プロンプトに混ぜてしまう。空のディレクトリで走らせれば拾うものが無い。
     home_dir: PathBuf,
     timeout: Duration,
@@ -94,13 +94,13 @@ impl ClaudeClient {
         }
     }
 
-    /// Claude に聞く。**プロンプトは受け取る** —— 相手が Chiezo 越しでも同じ文言に
+    /// Claude に聞く。プロンプトは受け取る —— 相手が Chiezo 越しでも同じ文言に
     /// なるよう、指示文は `ai.rs` の1か所に置いてある。
     pub async fn ask(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AskError> {
         self.ask_within(system_prompt, user_prompt, self.timeout).await
     }
 
-    /// 上限秒数を指定して聞く。**「詳しく調べる」は web 検索を伴って長くかかる**ので、
+    /// 上限秒数を指定して聞く。「詳しく調べる」は web 検索を伴って長くかかるので、
     /// 通常の問い合わせと同じ上限だと必ず途中で切れる。
     pub async fn ask_within(
         &self,
@@ -121,11 +121,11 @@ impl ClaudeClient {
             .arg("-p")
             .arg("--output-format")
             .arg("text")
-            // **指示文はこちらのものに置き換える**(既定の system prompt は
+            // 指示文はこちらのものに置き換える(既定の system prompt は
             // コーディング用で、こちらの用途とは噛み合わない)
             .arg("--system-prompt")
             .arg(system_prompt)
-            // **web 検索だけ許す。** 「詳しく調べる」はドメインの運営元・評判を
+            // web 検索だけ許す。 「詳しく調べる」はドメインの運営元・評判を
             // 外から調べる前提の指示文になっている。他の道具は許可を求めるが、
             // `-p` では聞けないので実行されない
             .arg("--allowed-tools")
@@ -157,7 +157,7 @@ impl ClaudeClient {
             }
         };
 
-        // **本文は標準入力から渡す。** Linux の単一引数の上限(MAX_ARG_STRLEN = 128KiB)に
+        // 本文は標準入力から渡す。 Linux の単一引数の上限(MAX_ARG_STRLEN = 128KiB)に
         // 当たると起動そのものができない —— 監視の一覧は数十件ぶんのドメインと理由を
         // 渡すので、材料が増えると届く長さになる
         let mut stdin = child.stdin.take();
@@ -170,7 +170,7 @@ impl ClaudeClient {
                 if let Err(e) = pipe.write_all(user_prompt.as_bytes()).await {
                     tracing::warn!(error = %e, "claudeへプロンプトを書けない");
                 }
-                // **閉じて EOF を送る。** 開けたままだと CLI は入力の続きを待つ
+                // 閉じて EOF を送る。 開けたままだと CLI は入力の続きを待つ
                 drop(pipe);
             }
             if let (Some(o), Some(e)) = (stdout.as_mut(), stderr.as_mut()) {
@@ -270,7 +270,7 @@ impl ClaudeClient {
         )
         .context("トークンを保存できない")?;
 
-        // **他のユーザーから読めないようにする。** サイドカーへ渡していた頃は別コンテナが
+        // 他のユーザーから読めないようにする。 サイドカーへ渡していた頃は別コンテナが
         // 読むので絞れなかったが、いま読むのはこのプロセスだけ
         if let Err(e) = fs::set_permissions(&self.settings_path, fs::Permissions::from_mode(0o600))
         {
@@ -280,7 +280,7 @@ impl ClaudeClient {
     }
 }
 
-/// 途中でやめた子プロセスを片付ける。**殺すだけでは足りない** ——
+/// 途中でやめた子プロセスを片付ける。殺すだけでは足りない ——
 /// `kill_on_drop` は SIGKILL を送るだけで待たないので、死んだ子はゾンビのまま残る
 /// (PID 1 がこのアプリ自身のコンテナでは、拾ってくれる init もいない)。
 async fn stop(child: &mut Child) {

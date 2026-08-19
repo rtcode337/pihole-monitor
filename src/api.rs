@@ -27,7 +27,7 @@ pub struct AppState {
     pub db: Db,
     pub pihole: PiholeClient,
     pub ai: Ai,
-    /// Pi-hole の**管理画面**の URL。理由の札から絞り込んだクエリログへ飛ばすために、
+    /// Pi-hole の管理画面の URL。理由の札から絞り込んだクエリログへ飛ばすために、
     /// `/api/watch` の応答へそのまま載せる(開くのはブラウザなので、APIのURLとは別に持てる)
     pub pihole_web_url: String,
 }
@@ -36,30 +36,33 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/domains", get(domains))
         .route("/api/review", post(review_post).delete(review_delete))
-        // **メモは確認済みと独立している。** 確認済みにしないと残せないと、
+        // メモは確認済みと独立している。 確認済みにしないと残せないと、
         // 「まだ判断していないが調べた内容は残したい」が表せない
         .route("/api/note", post(note_post))
-        // **口は1つ。** 行のボタン(1件)も「まとめて聞く」(区切って何度も)も同じここを通り、
+        // 口は1つ。 行のボタン(1件)も「まとめて聞く」(区切って何度も)も同じここを通り、
         // どちらも結果をメモとして保存する —— 1件用の口を別に持つと、指示文と保存の仕方が
         // 2か所に分かれる
         .route("/api/ask", post(ask))
-        // 「ブロックされていない怪しい通信」の候補。**ブロック済みの一覧とは別の口** ——
+        // 「ブロックされていない怪しい通信」の候補。ブロック済みの一覧とは別の口 ——
         // あちらは Pi-hole をその場で叩く集計、こちらは貯めた過去との突き合わせで、
         // 材料も判定も違う(watch.rs)
         .route("/api/watch", get(watch))
-        // 監視の基準日時。**ネットワークの設定を変えた日に押す** ——
+        // 監視の基準日時。ネットワークの設定を変えた日に押す ——
         // 変える前の記録は別の環境のもので、同じ画面に混ぜるとノイズにしかならない
         .route("/api/watch/baseline", post(watch_baseline))
-        // **1件を詳しく調べる。** `/api/ask` (まとめて短いメモを書かせる) とは
+        // 1件を詳しく調べる。 `/api/ask` (まとめて短いメモを書かせる) とは
         // 役割も相手も違う —— こちらはメインの1人だけに、web 検索と観測データを
         // 渡して深く調べさせる
         .route("/api/investigate", post(investigate))
-        // **調べた結果をもとに、もう一歩聞く。** 相手も材料も `/api/investigate` と同じで、
+        // 調べた結果をもとに、もう一歩聞く。 相手も材料も `/api/investigate` と同じで、
         // 違うのは「これまでのやり取りと質問を渡し、答えを調査結果の末尾に足す」ところ
         .route("/api/followup", post(followup))
-        // 設定画面の疎通確認(ping / 経路)。**一覧の判定には関わらない** ——
+        // 設定画面の疎通確認(ping / 経路)。一覧の判定には関わらない ——
         // 名前を引いた記録だけでは「その先に届くのか」が分からないので、手で叩ける口を置く
         .route("/api/diag", post(diag))
+        // 画面から決める設定。環境変数では渡せない —— 入口が2つあると
+        // 「どちらの値が効いているのか」を画面が説明し続けることになる
+        .route("/api/settings", get(settings_get).post(settings_post))
         .route("/api/ai", get(ai_get).post(ai_post))
         .route("/api/claude-token", post(claude_token))
 }
@@ -69,17 +72,15 @@ struct DomainEntry {
     domain: String,
     count: u32,
     reviewed: bool,
-    /// `""` = 未確認 / `"issue"` = 問題あり(ブロックされて当然) / `"ok"` = 問題なし(無害だった)
-    verdict: String,
     note: String,
-    /// 「詳しく調べる」の結果。**メモとは別**（詳細画面でメモの上に出す）
+    /// 「詳しく調べる」の結果。メモとは別（詳細画面でメモの上に出す）
     research: String,
     researched_at: String,
 }
 
 #[derive(Deserialize)]
 struct BaselineRequest {
-    /// unix秒。**null なら解除**（既定の窓に戻る）
+    /// unix秒。null なら解除（既定の窓に戻る）
     #[serde(default)]
     at: Option<i64>,
 }
@@ -89,7 +90,7 @@ async fn watch_baseline(
     State(state): State<AppState>,
     Json(req): Json<BaselineRequest>,
 ) -> Response {
-    // **未来は受け付けない。** 受け付けると候補が常に0件になり、
+    // 未来は受け付けない。 受け付けると候補が常に0件になり、
     // 「静かなのか壊れているのか」が画面から区別できなくなる
     let now = unix_now() as i64;
     if req.at.is_some_and(|at| at > now) {
@@ -105,7 +106,7 @@ async fn watch_baseline(
 #[derive(Deserialize)]
 struct InvestigateRequest {
     domain: String,
-    /// どちらの一覧から押されたか(`"blocked"` / `"watch"`)。**指示文がこれで変わる** ——
+    /// どちらの一覧から押されたか(`"blocked"` / `"watch"`)。指示文がこれで変わる ——
     /// 監視の候補を「ブロックされたドメイン」として説明させないため
     #[serde(default)]
     mode: String,
@@ -114,7 +115,7 @@ struct InvestigateRequest {
     reason: String,
 }
 
-/// 1件のドメインを詳しく調べる。**メインのAI1人**に、web 検索とこちらの観測データを渡す。
+/// 1件のドメインを詳しく調べる。メインのAI1人に、web 検索とこちらの観測データを渡す。
 async fn investigate(
     State(state): State<AppState>,
     Json(req): Json<InvestigateRequest>,
@@ -124,7 +125,7 @@ async fn investigate(
         return bad_request("domain required");
     }
 
-    // 観測データは**保持期間の窓**から作る(生のクエリが残っている範囲)
+    // 観測データは保持期間の窓から作る(生のクエリが残っている範囲)
     let now = unix_now();
     let profile = match state
         .db
@@ -165,8 +166,8 @@ async fn investigate(
         return internal_error(e, "調査結果を保存できない");
     }
 
-    // **メモが空のときだけ「ひとこと」を書く。** 調べた以上は一覧にも一言残っていて
-    // ほしいが、**人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない**
+    // メモが空のときだけ「ひとこと」を書く。 調べた以上は一覧にも一言残っていて
+    // ほしいが、人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない
     // —— 調査結果で黙って上書きすると、書いた判断が消える
     let note = match found.summary.clone() {
         Some(summary) => match state.db.save_note_if_empty(domain.clone(), summary).await {
@@ -188,10 +189,10 @@ async fn investigate(
     .into_response()
 }
 
-/// 観測データを渡す窓。**生のクエリが残っている範囲**(保持期間)より長くしても中身は増えない。
+/// 観測データを渡す窓。生のクエリが残っている範囲(保持期間)より長くしても中身は増えない。
 const PROFILE_WINDOW_SECS: f64 = 7.0 * 24.0 * 3600.0;
 
-/// 追加の質問の長さの上限(文字)。**長文を貼り付けさせない** ——
+/// 追加の質問の長さの上限(文字)。長文を貼り付けさせない ——
 /// 質問は「調べた結果のどこを掘るか」の一言で足り、
 /// 材料(調査結果・観測データ)はこちらが付ける。
 const MAX_QUESTION_CHARS: usize = 500;
@@ -199,7 +200,7 @@ const MAX_QUESTION_CHARS: usize = 500;
 #[derive(Deserialize)]
 struct FollowupRequest {
     domain: String,
-    /// 利用者の質問。**空は受け付けない**(何を聞くのか決まっていない問い合わせを投げない)
+    /// 利用者の質問。空は受け付けない(何を聞くのか決まっていない問い合わせを投げない)
     question: String,
     #[serde(default)]
     mode: String,
@@ -207,7 +208,7 @@ struct FollowupRequest {
     reason: String,
 }
 
-/// 調査結果をもとに、もう一歩聞く。**答えは調査結果の末尾に足す** ——
+/// 調査結果をもとに、もう一歩聞く。答えは調査結果の末尾に足す ——
 /// 別の列に分けると「1つ目の答え」と「その続き」が離れて読めなくなるし、
 /// 次の質問に渡す材料(それまでのやり取り)も組み立てにくい。
 async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest>) -> Response {
@@ -223,7 +224,7 @@ async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest
         return bad_request("質問が長すぎます（500文字まで）");
     }
 
-    // **調べた結果が無ければ聞かない。** 深掘りは前の答えを踏まえた続きなので、
+    // 調べた結果が無ければ聞かない。 深掘りは前の答えを踏まえた続きなので、
     // 材料が無いまま投げると「詳しく調べる」を劣った形でやり直すだけになる
     // (画面は調査結果があるときしか入力欄を出さないので、これは直に POST された場合の守り)
     let research = match state.db.research(domain.clone()).await {
@@ -265,7 +266,7 @@ async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest
         Err(AskError::Failed(message)) => return bad_gateway(&message),
     };
 
-    // **質問も一緒に残す。** 答えだけ足すと、後から読んだときに何に答えたのか分からない
+    // 質問も一緒に残す。 答えだけ足すと、後から読んだときに何に答えたのか分からない
     let addition = format!("── 質問: {question}\n{answer}");
     let merged = match state.db.append_research(domain.clone(), addition).await {
         Ok(merged) => merged,
@@ -275,7 +276,7 @@ async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest
     Json(json!({
         "success": true,
         "domain": domain,
-        // **全文を返す**(画面は差分を組み立てずに描き直せばよい)
+        // 全文を返す(画面は差分を組み立てずに描き直せばよい)
         "research": merged,
         "researched_at": chrono::Local::now().to_rfc3339(),
         "author": author,
@@ -283,7 +284,7 @@ async fn followup(State(state): State<AppState>, Json(req): Json<FollowupRequest
     .into_response()
 }
 
-/// 観測データを AI に渡す文面へ整える。**数字はそのまま渡す** ——
+/// 観測データを AI に渡す文面へ整える。数字はそのまま渡す ——
 /// こちらで「怪しい」と解釈してから渡すと、その解釈ごと信じた答えが返ってくる。
 fn format_profile(p: &crate::db::DomainProfile, now: f64) -> String {
     fn counts(label: &str, rows: &[(String, i64)]) -> String {
@@ -334,20 +335,15 @@ async fn watch(State(state): State<AppState>) -> Response {
     }
 }
 
-/// 確認済み/未確認の切り替えとメモの保存。**ドメインは配列** ——
+/// 確認済み/未確認の切り替えとメモの保存。ドメインは配列 ——
 /// 1件でもチェックした複数件でも同じ口を通す(一括用の口を別に持つと、
 /// 「メモを巻き込まない」等の決めごとが2か所に分かれる)。
 #[derive(Deserialize)]
 struct ReviewRequest {
     #[serde(default)]
     domains: Vec<String>,
-    /// 判定。**そのドメイン自身が問題のある通信か**を記録する。
-    /// `"issue"` = 問題あり(広告・トラッカー等。ブロックされて当然) /
-    /// `"ok"` = 問題なし(怪しい候補として挙がったが無害だった)。
-    /// **省略は `"ok"`** —— 画面は必ず送るので、これは直に POST されたときの保険。
-    #[serde(default)]
-    verdict: String,
-    /// **省略したらメモは触らない。** 一括で確認済みにするときに、
+    /// 判定。そのドメイン自身が問題のある通信かを記録する。
+    /// 省略したらメモは触らない。 一括で確認済みにするときに、
     /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
     note: Option<String>,
 }
@@ -358,9 +354,71 @@ struct TokenRequest {
     token: String,
 }
 
+/// Pi-hole から取り込むブロック済みクエリの件数。DB に持つ(画面から変える)。
+const QUERY_LIMIT_KEY: &str = "pihole:query_limit";
+
+/// 既定は全件。Pi-hole v6 API の `length` は省くと 100 件で切れるので、
+/// こちらから明示しないと「一覧が途中までしか出ない」ことに気づけない。
+const QUERY_LIMIT_DEFAULT: i64 = -1;
+
+/// 1回に取り込む件数の上限。青天井にしない —— 大きすぎる値を入れると
+/// Pi-hole の応答が数十MBになり、取り込みのたびに読み切れずに詰まる。
+const QUERY_LIMIT_MAX: i64 = 1_000_000;
+
+/// いまの取得件数。読めない値は既定に倒す(画面から入れ直せる)。
+async fn query_limit(state: &AppState) -> i64 {
+    match state.db.setting(QUERY_LIMIT_KEY).await {
+        Ok(Some(raw)) => raw.parse().unwrap_or(QUERY_LIMIT_DEFAULT),
+        Ok(None) => QUERY_LIMIT_DEFAULT,
+        Err(e) => {
+            tracing::warn!(error = ?e, "取得件数の設定を読み出せない");
+            QUERY_LIMIT_DEFAULT
+        }
+    }
+}
+
+/// 画面から決める設定を返す。
+async fn settings_get(State(state): State<AppState>) -> Response {
+    Json(json!({
+        "query_limit": query_limit(&state).await,
+        "query_limit_default": QUERY_LIMIT_DEFAULT,
+        "query_limit_max": QUERY_LIMIT_MAX,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct SettingsRequest {
+    /// 取得件数。`-1` で全件。知らない値は断る(下の検証)
+    query_limit: i64,
+}
+
+/// 設定を保存する。次の取得から効く(再起動は要らない)。
+async fn settings_post(State(state): State<AppState>, Json(req): Json<SettingsRequest>) -> Response {
+    // `0` と負の数(-1 以外)は断る。 0 件は「一覧が空になる」設定で、
+    // 押した人が意図することはまず無い —— 全件のつもりなら -1
+    if req.query_limit != QUERY_LIMIT_DEFAULT
+        && (req.query_limit < 1 || req.query_limit > QUERY_LIMIT_MAX)
+    {
+        return bad_request(&format!(
+            "取得件数は -1(全件)か 1〜{QUERY_LIMIT_MAX} の数で指定してください"
+        ));
+    }
+    match state
+        .db
+        .set_setting(QUERY_LIMIT_KEY, Some(req.query_limit.to_string()))
+        .await
+    {
+        Ok(()) => Json(json!({ "success": true, "query_limit": req.query_limit })).into_response(),
+        Err(e) => internal_error(e, "設定を保存できない"),
+    }
+}
+
 /// ブロック済みドメイン一覧。確認済みフラグとメモを付けて返す。
 async fn domains(State(state): State<AppState>) -> Response {
-    let blocked = match state.pihole.blocked_domains().await {
+    // 件数は実行のたびに読む(設定を変えたら次の更新から効く)
+    let limit = query_limit(&state).await;
+    let blocked = match state.pihole.blocked_domains(limit).await {
         Ok(blocked) => blocked,
         Err(e) => {
             tracing::error!(error = ?e, "Pi-holeからブロック済みドメインを取得できない");
@@ -386,7 +444,6 @@ async fn domains(State(state): State<AppState>) -> Response {
                 domain: domain.clone(),
                 count: *count,
                 reviewed: record.is_some_and(|r| r.reviewed),
-                verdict: record.map(|r| r.verdict.clone()).unwrap_or_default(),
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
@@ -395,14 +452,13 @@ async fn domains(State(state): State<AppState>) -> Response {
         .collect();
 
     // 直近のブロック済みクエリに出てこない記録も、件数0として一覧に残す
-    // (確認済みだけでなく**メモだけの行も残す** —— 調べた内容を画面から消さないため)
+    // (確認済みだけでなくメモだけの行も残す —— 調べた内容を画面から消さないため)
     for (domain, record) in &records {
         if !blocked_names.contains(domain) {
             entries.push(DomainEntry {
                 domain: domain.clone(),
                 count: 0,
                 reviewed: record.reviewed,
-                verdict: record.verdict.clone(),
                 note: record.note.clone(),
                 research: record.research.clone(),
                 researched_at: record.researched_at.clone(),
@@ -429,31 +485,20 @@ async fn review_post(State(state): State<AppState>, Json(req): Json<ReviewReques
         return bad_request("domains required");
     }
     let count = domains.len();
-    // **知らない値は受け付けない。** 直に POST された値で、絞り込みのどこにも
-    // 出てこない行を作らせない
-    let verdict = match req.verdict.trim() {
-        "" | "ok" => "ok",
-        "issue" => "issue",
-        _ => return bad_request("verdict は ok か issue"),
-    };
-    match state
-        .db
-        .set_reviewed(domains, true, Some(verdict.to_string()), req.note)
-        .await
-    {
+    match state.db.set_reviewed(domains, true, req.note).await {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "確認済みにできない"),
     }
 }
 
-/// 未確認に戻す。**メモは消さない**(メモが空の行だけ消える)。
+/// 未確認に戻す。メモは消さない(メモが空の行だけ消える)。
 async fn review_delete(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
     let domains = clean(req.domains);
     if domains.is_empty() {
         return bad_request("domains required");
     }
     let count = domains.len();
-    match state.db.set_reviewed(domains, false, None, None).await {
+    match state.db.set_reviewed(domains, false, None).await {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "未確認に戻せない"),
     }
@@ -475,11 +520,11 @@ struct AskRequest {
     #[serde(default)]
     domains: Vec<String>,
     /// どちらの一覧について聞いているか(`"blocked"` / `"watch"`)。
-    /// **未指定はブロック済み** —— 既定の一覧がそちらなので、古い画面や手で叩いた
+    /// 未指定はブロック済み —— 既定の一覧がそちらなので、古い画面や手で叩いた
     /// リクエストもそこに倒れる
     #[serde(default)]
     mode: String,
-    /// ドメイン → 候補に挙げた理由(監視のときだけ)。**配列ではなく対応表で受ける** ——
+    /// ドメイン → 候補に挙げた理由(監視のときだけ)。配列ではなく対応表で受ける ——
     /// 並びで対応させると、重複や空白落とし(`clean`)でずれる
     #[serde(default)]
     reasons: HashMap<String, String>,
@@ -487,8 +532,8 @@ struct AskRequest {
 
 /// 聞いて、結果をそのままメモに書き戻す(1件でも複数でも同じ)。
 ///
-/// **区切るのは画面側**(`MAX_DOMAINS_PER_ASK` ずつ何度も呼ぶ)。1回のリクエストを
-/// 短く保つと進捗が出せて、途中で失敗しても**そこまでのメモは残る** ——
+/// 区切るのは画面側(`MAX_DOMAINS_PER_ASK` ずつ何度も呼ぶ)。1回のリクエストを
+/// 短く保つと進捗が出せて、途中で失敗してもそこまでのメモは残る ——
 /// 全件を1リクエストにすると、最後まで待たされたうえに落ちたら何も残らない。
 async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Response {
     let domains = clean(req.domains);
@@ -516,7 +561,7 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Resp
         Err(AskError::Failed(message)) => return bad_gateway(&message),
     };
 
-    // **書き戻しは1トランザクション**。ここで失敗したら聞き直しになるので、
+    // 書き戻しは1トランザクション。ここで失敗したら聞き直しになるので、
     // 半分だけ入って「どこまで済んだか」が分からない状態は作らない
     if let Err(e) = state.db.save_notes(answer.notes.clone()).await {
         return internal_error(e, "メモを保存できない");
@@ -530,9 +575,9 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Resp
 
     Json(json!({
         "success": true,
-        // 実際に書いた相手。**複数いる**ので配列
+        // 実際に書いた相手。複数いるので配列
         "authors": answer.authors,
-        // 答えられなかった相手と理由(**1人落ちても残りは使う**)
+        // 答えられなかった相手と理由(1人落ちても残りは使う)
         "failures": answer.failures,
         "results": answer.notes.iter()
             .map(|(domain, note)| json!({ "domain": domain, "note": note }))
@@ -545,7 +590,7 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Resp
 
 #[derive(Deserialize)]
 struct DiagRequest {
-    /// `ping` か `traceroute`。**知らない値は断る**(呼ぶ側にコマンドを組ませない)
+    /// `ping` か `traceroute`。知らない値は断る(呼ぶ側にコマンドを組ませない)
     tool: String,
     /// 相手先(ホスト名かIP)。文字の確かめは `diag::run` の中
     target: String,
@@ -553,16 +598,16 @@ struct DiagRequest {
 
 /// 疎通を確かめる(設定画面から手で叩く)。
 ///
-/// **結果は加工せずに返す。** 見たいのは応答時間・欠落・どのホップで止まったかで、
-/// こちらで要約すると落ちる。**終了コードが0でなくても失敗ではない**
+/// 結果は加工せずに返す。 見たいのは応答時間・欠落・どのホップで止まったかで、
+/// こちらで要約すると落ちる。終了コードが0でなくても失敗ではない
 /// (応答が無いのも結果のうち)ので、エラーにはせず `end` に添えて返す。
 ///
-/// **応答は溜めずに流す**(1行1JSON = NDJSON)。ping は4回・経路は応答しないホップが
+/// 応答は溜めずに流す(1行1JSON = NDJSON)。ping は4回・経路は応答しないホップが
 /// あると数十秒かかるので、終わるまで待たせると画面が止まって見える。
 /// 種類は4つ —— `start`(走らせたコマンド)/ `line`(出力の1行)/ `name`(その行のIPの名前。
-/// **後から届いて行に足される**)/ `end`(終了コードとかかった時間)、それに `error`。
+/// 後から届いて行に足される)/ `end`(終了コードとかかった時間)、それに `error`。
 ///
-/// **打てなかったときだけ400のJSON**(相手先の形が悪い・コマンドが無い)——
+/// 打てなかったときだけ400のJSON(相手先の形が悪い・コマンドが無い)——
 /// 流し始めてから言うと、画面は 200 を受け取った後でエラーを読むことになる。
 async fn diag(State(_state): State<AppState>, Json(req): Json<DiagRequest>) -> Response {
     let Some(tool) = crate::diag::Tool::parse(&req.tool) else {
@@ -574,7 +619,7 @@ async fn diag(State(_state): State<AppState>, Json(req): Json<DiagRequest>) -> R
         Err(message) => return bad_request(&message),
     };
 
-    // 走らせたコマンドを先に流す。**画面はこれを見て「実行中」の見出しを出す**
+    // 走らせたコマンドを先に流す。画面はこれを見て「実行中」の見出しを出す
     let head = stream_iter([ndjson(&json!({
         "t": "start",
         "command": session.command,
@@ -601,7 +646,7 @@ async fn diag(State(_state): State<AppState>, Json(req): Json<DiagRequest>) -> R
         .expect("ヘッダは固定値なので組み立てに失敗しない")
 }
 
-/// 1行1JSON。**流す側で改行まで付ける**(受け取る側は行で切るだけでよい)。
+/// 1行1JSON。流す側で改行まで付ける(受け取る側は行で切るだけでよい)。
 fn ndjson(value: &serde_json::Value) -> Result<String, std::convert::Infallible> {
     Ok(format!("{value}\n"))
 }
@@ -618,7 +663,7 @@ async fn claude_token(State(state): State<AppState>, Json(req): Json<TokenReques
     }
 }
 
-/// いま選べる相手と、選ばれているもの。**繋がらない理由も一緒に返す** ——
+/// いま選べる相手と、選ばれているもの。繋がらない理由も一緒に返す ——
 /// 一覧が空なのが「未設定」なのか「届かない」のかを画面が言い分けられるように。
 async fn ai_get(State(state): State<AppState>) -> Response {
     let (backends, error) = match state.ai.backends().await {
@@ -629,16 +674,16 @@ async fn ai_get(State(state): State<AppState>) -> Response {
     Json(json!({
         "chiezo_url": state.ai.chiezo_url(),
         "cli_label": CLI_LABEL,
-        // 同梱の CLI を指す予約id。**画面に埋め込まない** —— 突き合わせる値は
+        // 同梱の CLI を指す予約id。画面に埋め込まない —— 突き合わせる値は
         // サーバが持っているものをそのまま使う
         "cli_backend": CLI_BACKEND,
-        // **有無だけ。** 値は返さない —— 画面が出すのは「登録済みか」だけでよい
+        // 有無だけ。 値は返さない —— 画面が出すのは「登録済みか」だけでよい
         "token_saved": state.ai.has_token(),
         "backends": backends,
         "selections": state.ai.selections().await,
-        // **メインの1人**(「詳しく調べる」の宛先)。画面のラジオを立てるのに使う
+        // メインの1人(「詳しく調べる」の宛先)。画面のラジオを立てるのに使う
         "primary": state.ai.primary_backend().await,
-        // 実際に聞く相手の名前(**空にならない** —— 未選択なら同梱の CLI)
+        // 実際に聞く相手の名前(空にならない —— 未選択なら同梱の CLI)
         "current": state.ai.current_names().await,
         "error": error,
     }))
@@ -647,7 +692,7 @@ async fn ai_get(State(state): State<AppState>) -> Response {
 
 #[derive(Deserialize)]
 struct SelectRequest {
-    /// 空なら同梱の CLI に戻す。**複数選べる** —— 選んだ全員に聞いて、
+    /// 空なら同梱の CLI に戻す。複数選べる —— 選んだ全員に聞いて、
     /// 答えを1つのメモに並べる。
     #[serde(default)]
     selections: Vec<SelectEntry>,
@@ -660,13 +705,13 @@ struct SelectEntry {
     model: String,
     #[serde(default)]
     effort: String,
-    /// 「詳しく調べる」を頼む1人。**複数立っていても先頭だけを採る**
+    /// 「詳しく調べる」を頼む1人。複数立っていても先頭だけを採る
     /// (画面はラジオなので普通は1人だが、直に POST されたら分からない)。
     #[serde(default)]
     primary: bool,
 }
 
-/// 聞く相手を保存する。**実在しない相手は受け付けない** ——
+/// 聞く相手を保存する。実在しない相手は受け付けない ——
 /// 黙って保存すると、次に聞いたときまで間違いに気づけない。
 async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) -> Response {
     // 同じ相手を2回選んでも意味が無い(同じ答えを2回もらうだけ)
@@ -686,7 +731,7 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
         };
     }
 
-    // **Chiezo に問い合わせるのは、Chiezo の相手が選ばれているときだけ** ——
+    // Chiezo に問い合わせるのは、Chiezo の相手が選ばれているときだけ ——
     // 同梱の CLI だけを選ぶ操作が、Chiezo の生死に左右されないようにする
     let backends = if entries.iter().any(|e| e.backend != CLI_BACKEND) {
         match state.ai.backends().await {
@@ -724,7 +769,7 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
 
         choices.push(AiChoice {
             backend: backend.id.clone(),
-            // **表記は選んだ時点のものを保存する**(表示のたびに Chiezo へ聞きに行かない)
+            // 表記は選んだ時点のものを保存する(表示のたびに Chiezo へ聞きに行かない)
             label: backend.label.clone(),
             model: (!model.is_empty()).then_some(model),
             effort: (!effort.is_empty()).then_some(effort),
@@ -732,7 +777,7 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
         });
     }
 
-    // **メインは必ず1人にする。** 誰も立っていなければ先頭を立てる ——
+    // メインは必ず1人にする。 誰も立っていなければ先頭を立てる ——
     // 立っていないと「詳しく調べる」が誰に行くのか画面から読めない。
     // 複数立っていたら先頭だけ残す(直に POST された値を信じない)
     let mut seen_primary = false;
@@ -750,7 +795,7 @@ async fn ai_post(State(state): State<AppState>, Json(req): Json<SelectRequest>) 
     }
 
     match state.ai.select(&choices).await {
-        // **保存したあとに読み直す。** 実際に聞く並び(メインが先頭)で返さないと、
+        // 保存したあとに読み直す。 実際に聞く並び(メインが先頭)で返さないと、
         // 保存直後のトーストだけ画面のボタンと違う順で出る
         Ok(()) => Json(json!({
             "success": true,
@@ -768,7 +813,7 @@ fn unix_now() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// 空白を落として重複を除く。**順番は保つ** ——
+/// 空白を落として重複を除く。順番は保つ ——
 /// 画面が出した並びのまま処理したいため(進捗の見え方が変わらない)。
 fn clean(values: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();

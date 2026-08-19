@@ -1,4 +1,4 @@
-/* 色は全部ここのカスタムプロパティにまとめてある。**個々の規則に生の色を書かないこと**
+/* 色は全部ここのカスタムプロパティにまとめてある。個々の規則に生の色を書かないこと
    —— 1か所で調整できなくなるし、ライト/ダークの片方だけ直してしまう。
 
    テーマの決まり方は3通り:
@@ -6,9 +6,9 @@
      2. 選んでいない      → OS の設定(prefers-color-scheme)に従う
      3. どちらも無い      → 下の :root の値(= ダーク。このアプリの既定の見た目)
 
-   **ライトの値は2か所に書いてある**(OS 追従用のメディアクエリと、明示指定用の
+   ライトの値は2か所に書いてある(OS 追従用のメディアクエリと、明示指定用の
    属性セレクタ)。CSS では「メディアクエリ or 属性」を1つの規則にまとめられないため。
-   **片方だけ直さないこと。** */
+   片方だけ直さないこと。 */
 :root {
   /* ダーク(既定) */
   color-scheme: dark;
@@ -91,7 +91,7 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* **`hidden` 属性を作者スタイルより強くする。**
+/* `hidden` 属性を作者スタイルより強くする。
    ブラウザ既定の `[hidden] { display: none }` は作者スタイルに負けるので、
    `display` を持つクラス（`.watch-baseline` は `flex`）が付いた要素は
    `hidden` を付けても出たままになる —— 「JSが出し入れする」作りが静かに壊れる
@@ -100,7 +100,7 @@
 [hidden] { display: none !important; }
 
 /* プレースホルダーは入力済みの値と見間違えない濃さにする。ブラウザ既定は本文に近い濃さで、
-   **何か入力してあるように見える**（実際に経路の相手先やメモが設定済みに見えた）。
+   何か入力してあるように見える（実際に経路の相手先やメモが設定済みに見えた）。
    個別のセレクタで書いて回ると、欄を足すたびに書き忘れて濃いままの欄が混ざるので、
    ここで一度だけ効かせる */
 ::placeholder { color: var(--c-dim); opacity: 1; }
@@ -110,7 +110,7 @@ body {
   background: var(--c-bg);
   color: var(--c-text);
   min-height: 100vh;
-  /* ブラウザ自前の「引っ張って更新」を止める。**こちらで持っているため** ——
+  /* ブラウザ自前の「引っ張って更新」を止める。こちらで持っているため ——
      止めないと、指を離したときにページの再読み込みとこちらの読み直しが二重に走る
      （静的なJS/CSSまで取り直すぶん、こちらだけのほうが速い） */
   overscroll-behavior-y: contain;
@@ -141,6 +141,44 @@ header h1 {
 }
 
 header h1 span { color: var(--c-text); }
+
+/* ヘッダーのページ切り替え（ドメイン / 設定）。タブではなくリンクなので、
+   見た目だけボタンにそろえる（下線は消す） */
+.pagenav {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.page-btn {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-muted);
+  font-family: inherit;
+  font-size: 12px;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+
+.page-btn:hover { color: var(--c-text); }
+
+/* 開いているページだけ枠を出す（どちらを見ているかは常に分かるようにする） */
+.page-btn.active {
+  color: var(--c-text-strong);
+  border-color: var(--c-border-strong);
+  background: var(--c-surface);
+}
+
+/* 設定のページの1項目。保存の結果はその場に残す（トーストは消える） */
+.settings-status {
+  font-size: 11px;
+  color: var(--c-muted);
+}
+
+.settings-status.ok { color: var(--c-blue); }
+.settings-status.error { color: var(--c-red); }
 
 .stats {
   display: flex;
@@ -177,7 +215,7 @@ header h1 span { color: var(--c-text); }
 }
 
 /* 上段のタブ。ブロック済み / 未ブロックの監視 を切り替える。
-   **フィルター（未確認・確認済み）より上の段に置く** —— 一覧そのものが入れ替わる操作で、
+   フィルター（未確認・確認済み）より上の段に置く —— 一覧そのものが入れ替わる操作で、
    同じ列に並べると「絞り込みの一種」に見える */
 .modebar {
   padding: 0 32px;
@@ -211,7 +249,7 @@ header h1 span { color: var(--c-text); }
   background: var(--c-bg);
 }
 
-/* 監視モードの前置き（どこまで見えているか）。**0件の意味を読み違えさせない** */
+/* 監視モードの前置き（どこまで見えているか）。0件の意味を読み違えさせない */
 .watch-context {
   padding: 10px 14px;
   margin: 0 32px 12px;
@@ -250,7 +288,7 @@ header h1 span { color: var(--c-text); }
 .watch-baseline input:focus { outline: none; border-color: var(--c-blue); }
 .watch-qtypes { color: var(--c-dim); }
 
-/* 候補が挙がった理由。**手ごとに色を変える** —— 同じ見た目だと、
+/* 候補が挙がった理由。手ごとに色を変える —— 同じ見た目だと、
    「新しく見ただけ」と「トンネリングの疑い」が並んで同じ重さに見える */
 .reasons {
   display: flex;
@@ -280,14 +318,14 @@ header h1 span { color: var(--c-text); }
   background: var(--c-amber-bg);
 }
 
-/* トンネリングの疑い。**一番強い色にする** */
+/* トンネリングの疑い。一番強い色にする */
 .reason-rare_qtype {
   border-color: var(--c-red-border);
   color: var(--c-red);
   background: var(--c-red-bg);
 }
 
-/* 規則正しく鳴っている。**初出とは別の色**にする —— 意味がまるで違う
+/* 規則正しく鳴っている。初出とは別の色にする —— 意味がまるで違う
    （初出は「新しい」、こちらは「機械が定期的に喋っている」） */
 .reason-beacon {
   border-color: var(--c-green);
@@ -302,7 +340,7 @@ header h1 span { color: var(--c-text); }
   background: var(--c-red-bg);
 }
 
-/* Pi-hole のクエリログへ飛ぶ理由の札。**色は手ごとのまま**（リンクだからといって
+/* Pi-hole のクエリログへ飛ぶ理由の札。色は手ごとのまま（リンクだからといって
    青くしない —— 手の見分けが色なので、そこを潰すと意味が消える）。
    押せることは下線と手の形で示す */
 a.reason-link {
@@ -321,7 +359,7 @@ a.reason-link:hover {
   color: var(--c-dim);
 }
 
-/* 「どうやって候補を選んでいるか」。**畳んでおく** ——
+/* 「どうやって候補を選んでいるか」。畳んでおく ——
    普段は前置きだけ読めばよく、腑に落ちないときに開くもの */
 .watch-methods {
   margin-top: 8px;
@@ -446,7 +484,7 @@ a.reason-link:hover {
 
 .domain-item:hover { border-color: var(--c-border-strong); }
 
-/* バッジと操作ボタンのまとまり。**狭い画面ではこの塊ごと次の行へ落とす**（下の @media）——
+/* バッジと操作ボタンのまとまり。狭い画面ではこの塊ごと次の行へ落とす（下の @media）——
    個々のボタンを行に直接並べたままだと、幅が足りない画面で domain-info が0幅まで潰れ、
    ドメインとメモが1文字ずつ縦に折り返して読めなくなる */
 .domain-actions {
@@ -496,7 +534,7 @@ a.reason-link:hover {
   color: var(--c-muted);
   margin-top: 3px;
   word-break: break-word;
-  /* **改行を保つ。** 相手が複数だと `[相手] …` が人数ぶん並ぶので、
+  /* 改行を保つ。 相手が複数だと `[相手] …` が人数ぶん並ぶので、
      1行に潰すと誰の見立てなのか読めない */
   white-space: pre-wrap;
 }
@@ -516,7 +554,7 @@ a.reason-link:hover {
   border: 1px solid var(--c-blue-border);
 }
 
-/* 未確認のバッジは**詳細モーダルだけ**に出す。一覧の行には出さない
+/* 未確認のバッジは詳細モーダルだけに出す。一覧の行には出さない
    （行では左の赤い点が同じことを言っていて、二重になる） */
 .badge.unreviewed {
   background: var(--c-red-bg);
@@ -535,7 +573,7 @@ a.reason-link:hover {
   letter-spacing: 0.04em;
 }
 
-/* 判定の2つ。**色で意味を分ける** —— 一覧を流し見したときに、
+/* 判定の2つ。色で意味を分ける —— 一覧を流し見したときに、
    対処が要る行だけは見落としたくない */
 .ok-btn {
   border: 1px solid var(--c-blue-border);
@@ -544,23 +582,6 @@ a.reason-link:hover {
 }
 
 .ok-btn:hover { background: var(--c-blue-bg-strong); }
-
-.issue-btn {
-  border: 1px solid var(--c-red-border);
-  background: transparent;
-  color: var(--c-red);
-}
-
-.issue-btn:hover { background: var(--c-red-bg); }
-
-/* 問題ありのバッジ。数字（.stat-value.issue）と同じ赤にそろえる */
-.badge.issue {
-  background: var(--c-red-bg);
-  color: var(--c-red);
-  border: 1px solid var(--c-red-border);
-}
-
-.stat-value.issue { color: var(--c-red); }
 
 .review-btn {
   border: 1px solid var(--c-blue-border);
@@ -599,7 +620,7 @@ a.reason-link:hover {
 
 .ai-btn:hover { background: var(--c-amber-bg); }
 
-/* 設定。**歯車だけの見た目にする** —— 押す前に中身が分かる必要がある他のボタン
+/* 設定。歯車だけの見た目にする —— 押す前に中身が分かる必要がある他のボタン
    （相手の名前・件数）と違い、こちらは「設定」で用が足りる */
 .settings-btn {
   padding: 6px 12px;
@@ -686,7 +707,7 @@ a.reason-link:hover {
 
 .bulk-limit input:focus { outline: none; border-color: var(--c-blue); }
 
-/* 進んだぶんを1行ずつ積む。**画面から溢れないよう頭打ちにして中でスクロールさせる** */
+/* 進んだぶんを1行ずつ積む。画面から溢れないよう頭打ちにして中でスクロールさせる */
 .bulk-log {
   font-size: 11px;
   line-height: 1.6;
@@ -702,7 +723,7 @@ a.reason-link:hover {
 
 /* ---- 聞く相手の選択 ---- */
 
-/* CLIブリッジのトークン。**値は表示に出さない**（保存済みかどうかだけ隣に出す）ので、
+/* CLIブリッジのトークン。値は表示に出さない（保存済みかどうかだけ隣に出す）ので、
    入力は伏せ字にしてある */
 .ai-token {
   background: var(--c-bg);
@@ -773,7 +794,7 @@ a.reason-link:hover {
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  /* **0幅まで潰させない。** `min-width: 0` にすると、同じ行の要素（メインのラジオ・
+  /* 0幅まで潰させない。 `min-width: 0` にすると、同じ行の要素（メインのラジオ・
      トークン入力）に押されて名前が1文字ずつ縦に折り返す。`.ai-row` は
      `flex-wrap: wrap` なので、潰れる代わりに次の行へ回ってほしい */
   min-width: 9rem;
@@ -916,9 +937,9 @@ a.reason-link:hover {
   padding: 24px;
   width: 480px;
   max-width: 90vw;
-  /* **中身が画面より高くなったらモーダルごとスクロールさせる。**
-     覆いは flex で中央寄せなので、これが無いと上下がはみ出して**読めないまま
-     手も出せない**（メモや調査結果が長いと実際にそうなっていた）。
+  /* 中身が画面より高くなったらモーダルごとスクロールさせる。
+     覆いは flex で中央寄せなので、これが無いと上下がはみ出して読めないまま
+     手も出せない（メモや調査結果が長いと実際にそうなっていた）。
      スクロールの場所は1つに保つ —— 中の箱にも縦スクロールを持たせると、
      どちらが動くのか指の位置で変わって扱いにくい */
   max-height: 88vh;
@@ -985,7 +1006,7 @@ a.reason-link:hover {
 .confirm-btn:hover { background: var(--c-blue-bg-hover); }
 
 /* ---- 行を押して開く詳細モーダル ---- */
-/* **狭い画面ではここが本体。** 行に収まりきらないもの（長いドメイン名と、相手ごとに
+/* 狭い画面ではここが本体。 行に収まりきらないもの（長いドメイン名と、相手ごとに
    何行にもなるメモ）を、幅いっぱいで読ませる */
 
 .detail-domain {
@@ -996,7 +1017,7 @@ a.reason-link:hover {
   margin-bottom: 10px;
 }
 
-/* 詳細のコピーは**文字の隣に置く**。.copy-btn は一覧の行に合わせて position: absolute で
+/* 詳細のコピーは文字の隣に置く。.copy-btn は一覧の行に合わせて position: absolute で
    浮かせてあり、そのままだと位置の基準になる祖先が無くてモーダルの外へ飛ぶ。
    常に出すのは、一覧のように hover では出せないため（タッチ端末に hover が無い） */
 .copy-btn.detail-copy {
@@ -1033,18 +1054,18 @@ a.reason-link:hover {
   border-radius: 4px;
   padding: 10px;
   margin-bottom: 16px;
-  /* **改行を保つ。** 相手が複数だと `[相手] …` が人数ぶん並ぶので、
+  /* 改行を保つ。 相手が複数だと `[相手] …` が人数ぶん並ぶので、
      1行に潰すと誰の見立てなのか読めない（一覧の .domain-note と同じ理由） */
   white-space: pre-wrap;
   word-break: break-word;
-  /* **ここでは高さを切らない。** 切ると、メモの箱と調査結果の箱とモーダルで
+  /* ここでは高さを切らない。 切ると、メモの箱と調査結果の箱とモーダルで
      スクロールする場所が3つになり、どれが動くのか指の位置で変わる。
      画面からはみ出さないようにするのは `.modal` 側の役目 */
 }
 
 .detail-note.is-empty { color: var(--c-dim); }
 
-/* 「詳しく調べる」の結果。**メモより上に、メモとは違う見た目で出す** ——
+/* 「詳しく調べる」の結果。メモより上に、メモとは違う見た目で出す ——
    人が書いた判断とAIが調べた内容が同じ面に並ぶと、どちらを信じたのか後から分からない */
 .detail-research {
   font-size: 12px;
@@ -1058,12 +1079,24 @@ a.reason-link:hover {
   margin-bottom: 16px;
   white-space: pre-wrap;
   word-break: break-word;
-  /* **ここでも高さを切らない**（`.detail-note` と同じ理由。溢れの面倒は `.modal` が見る） */
+  /* ここでも高さを切らない（`.detail-note` と同じ理由。溢れの面倒は `.modal` が見る） */
 }
 
-/* ---- 設定（ネットワークの確認） ---- */
+/* ---- 設定のページ（取り込む件数・ネットワークの確認） ---- */
 
-.settings-section { margin-bottom: 16px; }
+/* モーダルの中だった頃は `.modal` の padding が効いていた。ページになったので、
+   外周の余白は一覧（`.domain-list` 等）と同じにそろえる */
+#page-settings { padding: 0 32px 32px; }
+
+/* 1項目を面で囲む。続きものに見せない —— 設定は互いに独立した操作で、
+   地の文で続けて並べるとどこまでが1つの設定なのか読めない */
+.settings-section {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+}
 
 .settings-note {
   font-size: 11px;
@@ -1096,7 +1129,7 @@ a.reason-link:hover {
 
 .diag-input:focus { outline: none; border-color: var(--c-blue); }
 
-/* 走らせたコマンド。**結果の上に出す** —— 何をした結果なのか分からないと読めない */
+/* 走らせたコマンド。結果の上に出す —— 何をした結果なのか分からないと読めない */
 .diag-command {
   font-size: 11px;
   color: var(--c-dim);
@@ -1123,7 +1156,7 @@ a.reason-link:hover {
 
 /* ---- 下に引っ張って更新 ---- */
 
-/* **画面の上端に固定して置く。** 引っ張った量だけ JS が降ろす（transform）ので、
+/* 画面の上端に固定して置く。 引っ張った量だけ JS が降ろす（transform）ので、
    ここでは中身の見た目だけを決める */
 .pull-indicator {
   position: fixed;
@@ -1161,7 +1194,7 @@ a.reason-link:hover {
   to { transform: rotate(360deg); }
 }
 
-/* 調査結果のすぐ下に置く追加質問。**読んで浮かんだ疑問をその場で投げる**ための欄なので、
+/* 調査結果のすぐ下に置く追加質問。読んで浮かんだ疑問をその場で投げるための欄なので、
    結果と同じ塊に見えるよう間を詰める（離すと入力欄を探すことになる） */
 .followup {
   display: flex;
@@ -1196,7 +1229,7 @@ a.reason-link:hover {
   gap: 8px;
 }
 
-/* 見出しに添えるいつ調べたか。**見出しと同じ行に小さく置く** */
+/* 見出しに添えるいつ調べたか。見出しと同じ行に小さく置く */
 .detail-when {
   margin-left: 8px;
   color: var(--c-dim);
@@ -1218,11 +1251,11 @@ a.reason-link:hover {
 #detail-actions { flex-wrap: wrap; }
 
 /* ---- 狭い画面（スマホ） ---- */
-/* 直すのは2つ。**外周の余白**（32px ずつ取られると本文の幅がほとんど残らない）と、
-   **行の組み方**（1行に詰めるのをやめる）。
+/* 直すのは2つ。外周の余白（32px ずつ取られると本文の幅がほとんど残らない）と、
+   行の組み方（1行に詰めるのをやめる）。
    行を flex のまま詰めていたときは、幅の足りないぶんが flex:1 の .domain-info だけから
-   削られて0幅まで潰れ、`word-break: break-all` と相まって**ドメインもメモも1文字ずつ
-   縦に折り返して読めなくなっていた**。grid にして、1段目にドメインとメモ、2段目に操作を置く */
+   削られて0幅まで潰れ、`word-break: break-all` と相まってドメインもメモも1文字ずつ
+   縦に折り返して読めなくなっていた。grid にして、1段目にドメインとメモ、2段目に操作を置く */
 @media (max-width: 720px) {
   header { padding: 16px 14px; gap: 12px; }
   .stats { padding: 0 14px; margin: 16px 0; }
@@ -1234,10 +1267,11 @@ a.reason-link:hover {
   .watch-baseline { padding: 0 14px; }
   .select-bar { padding: 0 14px; }
   .domain-list { padding: 0 14px 24px; }
+  #page-settings { padding: 0 14px 24px; }
 
   .domain-item {
     display: grid;
-    /* 3列目に minmax(0, 1fr) を使う。**auto や 1fr だけだと中身の最小幅で押し広げられ**、
+    /* 3列目に minmax(0, 1fr) を使う。auto や 1fr だけだと中身の最小幅で押し広げられ、
        長いドメインが列をはみ出す（grid の既定の min-width が auto のため） */
     grid-template-columns: auto auto minmax(0, 1fr);
     align-items: start;

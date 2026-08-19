@@ -8,7 +8,7 @@ const MOON_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" s
 let allDomains = [];
 let currentFilter = 'new';
 // 'blocked' = Pi-holeが止めたもの / 'watch' = 素通りしているものの中の怪しい候補。
-// **同じ一覧の変数に入れる**ので、フィルター・選択・まとめて聞く・詳細モーダルは
+// 同じ一覧の変数に入れるので、フィルター・選択・まとめて聞く・詳細モーダルは
 // どちらのモードでもそのまま動く（行が持つ項目が増えるだけ）
 let currentMode = 'blocked';
 // 監視モードの前置き（どこまで見えているか）。/api/watch の応答から作る
@@ -19,25 +19,25 @@ let answerPendingDomain = null;
 let aiState = null;
 // まとめて聞いている間は true（同時に2回走らせない・実行中に閉じさせない）
 let bulkRunning = false;
-// 行のボタンで聞いている最中のドメイン。**再描画をまたいで残す** ——
+// 行のボタンで聞いている最中のドメイン。再描画をまたいで残す ——
 // 行のDOMは renderDomains() で作り直されるので、ボタン側に状態を持たせると消える
 const askingDomains = new Set();
 // 相手を選ぶモーダルを開くときに出したい一言（トークン未登録で開いたときなど）
 let aiModalMessage = null;
-// 詳細を開いているドメイン。**ドメイン名だけを持つ**（オブジェクトを持つと、
+// 詳細を開いているドメイン。ドメイン名だけを持つ（オブジェクトを持つと、
 // AIに聞いた後の allDomains の更新が詳細に映らない）
 let detailDomain = null;
-// 詳細画面で書きかけの追加質問。**変数に持つ** —— 詳細の中身は renderDetail() が
+// 詳細画面で書きかけの追加質問。変数に持つ —— 詳細の中身は renderDetail() が
 // innerHTML で作り直すので、textarea に入れたままだと聞いている間に消える
 let followupDraft = '';
-// チェックした行。**再描画をまたいで残す**（行のDOMは作り直される）
+// チェックした行。再描画をまたいで残す（行のDOMは作り直される）
 const selectedDomains = new Set();
 
 // 「まとめてAIに聞く」1回の上限の既定。枠と時間を使いすぎないための歯止め
 // （画面で変えられ、localStorageに残る）
 const BULK_LIMIT_DEFAULT = 100;
 
-// 1リクエストで聞く件数。**サーバ側の MAX_DOMAINS_PER_ASK と同じ値にすること**
+// 1リクエストで聞く件数。サーバ側の MAX_DOMAINS_PER_ASK と同じ値にすること
 // （超えると 400 で断られる）。区切って何度も呼ぶので進捗が出せて、
 // 途中で失敗してもそこまでのメモは残る
 const BULK_CHUNK = 10;
@@ -55,7 +55,7 @@ function effectiveTheme() {
 function renderTheme() {
   const dark = effectiveTheme() === 'dark';
   const btn = document.getElementById('theme-btn');
-  // 出すのは**切り替わる先**の印。いまの状態を出すと「押したらどうなるか」が読めない
+  // 出すのは切り替わる先の印。いまの状態を出すと「押したらどうなるか」が読めない
   btn.innerHTML = dark ? SUN_ICON : MOON_ICON;
   btn.title = dark ? 'ライトに切り替える' : 'ダークに切り替える';
   // アドレスバー・タスクスイッチャーの色も合わせる（合わないと帯だけ暗いままになる）
@@ -73,7 +73,7 @@ function toggleTheme() {
 // OS の設定に従っている間は、OS 側の切り替えにボタンの印も追従させる
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', renderTheme);
 
-// ISO8601 を「8/19 00:12」の形にする。**秒とタイムゾーンは出さない** ——
+// ISO8601 を「8/19 00:12」の形にする。秒とタイムゾーンは出さない ——
 // 見出しの添え物なので、いつ調べたかが分かれば足りる
 function shortTime(iso) {
   const d = new Date(iso);
@@ -90,7 +90,7 @@ function setMode(mode, event) {
   currentMode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   if (event) event.target.classList.add('active');
-  // **モードを跨いだ選択は残さない。** 別の一覧の行を選んだまま「選択を確認済みにする」を
+  // モードを跨いだ選択は残さない。 別の一覧の行を選んだまま「選択を確認済みにする」を
   // 押すと、見えていないものを確認済みにすることになる
   selectedDomains.clear();
   loadDomains();
@@ -121,7 +121,7 @@ async function loadDomains() {
 }
 
 // unix秒 → datetime-local が受け取る形（ローカル時刻の "YYYY-MM-DDTHH:MM"）。
-// **UTCのISO文字列をそのまま入れない** —— 入力欄はローカル時刻として読むので9時間ずれる
+// UTCのISO文字列をそのまま入れない —— 入力欄はローカル時刻として読むので9時間ずれる
 function toLocalInput(unixSecs) {
   const d = new Date(unixSecs * 1000);
   const p = n => String(n).padStart(2, '0');
@@ -157,7 +157,7 @@ async function postBaseline(at, message) {
     const result = await resp.json();
     if (result.success) {
       showToast(message, 'success');
-      // **保存したら読み直す。** 候補も前置きもこの日時から作り直される
+      // 保存したら読み直す。 候補も前置きもこの日時から作り直される
       loadDomains();
       return;
     }
@@ -167,7 +167,7 @@ async function postBaseline(at, message) {
   }
 }
 
-// 監視モードの前置き。**「どこまで見えているか」を必ず出す** ——
+// 監視モードの前置き。「どこまで見えているか」を必ず出す ——
 // 材料が貯まっていない時期の「0件」を、平穏だと読み違えないため
 function renderWatchContext() {
   const box = document.getElementById('watch-context');
@@ -203,9 +203,9 @@ function renderWatchContext() {
   box.hidden = false;
 }
 
-// 「どうやって候補を選んでいるか」。**畳んでおく**（普段は前置きの数行だけ読めばよく、
+// 「どうやって候補を選んでいるか」。畳んでおく（普段は前置きの数行だけ読めばよく、
 // 「なぜこれが挙がったのか腑に落ちない」ときに開く）。
-// **文はサーバがしきい値から組み立てたものをそのまま出す** —— ここに散文で書き写すと、
+// 文はサーバがしきい値から組み立てたものをそのまま出す —— ここに散文で書き写すと、
 // 定数を変えたときに説明だけが古くなる
 function methodsHtml(m) {
   if (!m.methods || !m.methods.length) return '';
@@ -244,16 +244,12 @@ function showFetchError() {
 
 function updateStats() {
   const newCount = allDomains.filter(d => !d.reviewed).length;
-  // **仕分けが済んだ件数（問題あり + 問題なし）を出す。** 内訳を数字にしていた時期が
-  // あったが、**同じ数字なのにタブで読み方が逆になる** —— 未ブロックの監視では
-  // 「見つけた問題の数」（多いほど困る）、ブロック済みでは「ブロックが妥当だと
-  // 確かめた数」（多いほど順調）。ここで見たいのは「あとどれだけ仕分けが残っているか」で、
-  // 済んだものが問題ありだったか問題なしだったかは、絞り込みで見れば足りる
+  // 見たいのは「あとどれだけ確認が残っているか」なので、確認済みの数はそのまま出す
   const reviewedCount = allDomains.filter(d => d.reviewed).length;
   document.getElementById('stat-new').textContent = newCount;
   document.getElementById('stat-reviewed').textContent = reviewedCount;
   document.getElementById('stat-total').textContent = allDomains.length;
-  // **3つ目の数字は意味が変わる。** ブロック済みでは「止めた総数」だが、
+  // 3つ目の数字は意味が変わる。 ブロック済みでは「止めた総数」だが、
   // 監視では「挙がった候補の数」——同じラベルのままだと嘘になる
   document.getElementById('stat-total-label').textContent =
     currentMode === 'watch' ? '怪しい候補' : 'ブロック総数';
@@ -270,32 +266,24 @@ function setFilter(filter, event) {
 // 同じ1か所から出るようにする（食い違うと、見えていない行にメモが付く）
 function filteredDomains() {
   if (currentFilter === 'new') return allDomains.filter(d => !d.reviewed);
-  // **判定は2つに分ける。** 一覧に並ぶものは「ブロックが妥当だったもの」と
-  // 「怪しく見えただけのもの」が混ざっていて、「確認済み」の一語に畳むと
-  // **何が誤検知だったのかが分からなくなる**
-  if (currentFilter === 'ok') return allDomains.filter(d => d.verdict === 'ok');
-  if (currentFilter === 'issue') return allDomains.filter(d => d.verdict === 'issue');
+  if (currentFilter === 'reviewed') return allDomains.filter(d => d.reviewed);
   return allDomains;
 }
 
-// 候補が挙がった理由。**必ず出す** —— 「なぜこれが並んでいるのか」が読めない一覧は、
+// 候補が挙がった理由。必ず出す —— 「なぜこれが並んでいるのか」が読めない一覧は、
 // 誤検知か本物かを人が判断できず、結局まるごと無視されることになる。
 // ブロック済みの行には reasons が無いので、そのときは何も出さない
-// 判定のバッジ。`issue` = そのドメインが問題のある通信（ブロックされて当然）、
-// `ok` = 怪しい候補として挙がったが無害だった
-function verdictBadge(d) {
-  if (d.verdict === 'issue') return '<span class="badge issue">問題あり</span>';
-  if (d.verdict === 'ok') return '<span class="badge reviewed">問題なし</span>';
-  // 判定を持たない確認済み（旧データ）は、そうと分かるように出す
-  if (d.reviewed) return '<span class="badge reviewed">確認済</span>';
-  return '';
+// 確認済みのバッジ。未確認の行には出さない —— 既読管理はしていないので
+// 「NEW」は嘘になる。未確認であることは左の赤い点で足りる
+function reviewedBadge(d) {
+  return d.reviewed ? '<span class="badge reviewed">確認済</span>' : '';
 }
 
 // 理由の元になった通信を、Pi-hole のクエリログで絞り込んで開く URL。
-// **パラメータ名は Pi-hole のものをサーバがそのまま返している**（domain / client_ip /
+// パラメータ名は Pi-hole のものをサーバがそのまま返している（domain / client_ip /
 // type / reply）ので、ここは値をエンコードして並べるだけでよい —— 手ごとに違う絞り込み方
 // （種別なら type、NXDOMAIN なら reply）を画面側に散らかさない。
-// 時間の範囲は**判定に使った窓とそろえる**（画面が持つ現在時刻は使わない）。
+// 時間の範囲は判定に使った窓とそろえる（画面が持つ現在時刻は使わない）。
 // Pi-hole の管理画面の URL が分からなければ空を返し、呼び出し側がリンクをやめる
 function piholeQueryUrl(filter) {
   if (!watchMeta || !watchMeta.pihole_url || !filter) return '';
@@ -306,7 +294,7 @@ function piholeQueryUrl(filter) {
   return `${watchMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
 }
 
-// AIに渡す「候補に挙げた理由」。**画面に出している文をそのまま渡す** ——
+// AIに渡す「候補に挙げた理由」。画面に出している文をそのまま渡す ——
 // 人が読んでいる根拠とAIが見ている根拠が食い違うと、答えが当たっているのか判断できない
 function reasonText(d) {
   if (!d || !d.reasons || !d.reasons.length) return '';
@@ -322,7 +310,7 @@ function reasonsHtml(d) {
     .map(r => {
       const cls = `reason reason-${escapeHtml(r.kind)}`;
       const url = piholeQueryUrl(r.filter);
-      // **押したら元の通信が見られるようにする。** 「規則正しく鳴っている」と言われても、
+      // 押したら元の通信が見られるようにする。 「規則正しく鳴っている」と言われても、
       // 本当にそうなっているかは Pi-hole のクエリログを見るのが一番早い。
       // リンクは一覧の行の中にあるが、詳細モーダルは開かない（委譲した click が a を除いている）
       if (!url) return `<span class="${cls}">${escapeHtml(r.detail)}</span>`;
@@ -351,7 +339,7 @@ function renderDomains() {
   // 選択のバー（件数・ボタンの有効/無効）も一覧と一緒に描き直す
   renderSelection(filtered);
 
-  // **操作は .domain-actions でひとまとめにする。** 狭い画面ではこの塊ごと次の行へ落として
+  // 操作は .domain-actions でひとまとめにする。 狭い画面ではこの塊ごと次の行へ落として
   // ドメインとメモに幅を明け渡す（style.css の @media）—— 個々のボタンを行に直接並べていた
   // ままだと、幅の足りない画面で domain-info が0幅まで潰れ、1文字ずつ縦に折り返して読めなくなる
   list.innerHTML = filtered.map(d => `
@@ -366,11 +354,11 @@ function renderDomains() {
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
       </div>
       <div class="domain-actions">
-        <!-- 未確認の行にバッジは出さない。**既読管理はしていないので「NEW」は嘘になる**
+        <!-- 未確認の行にバッジは出さない。既読管理はしていないので「NEW」は嘘になる
              （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
              「確認済」バッジの有無で足りる -->
-        ${verdictBadge(d)}
-        <!-- 1件だけ聞く。**答えはそのままメモになる**（回答を見せるモーダルは無い）。
+        ${reviewedBadge(d)}
+        <!-- 1件だけ聞く。答えはそのままメモになる（回答を見せるモーダルは無い）。
              聞いている間は押せないようにする —— 状態は askingDomains に持つ（この行のDOMは
              再描画で作り直されるため） -->
         ${askingDomains.has(d.domain)
@@ -379,18 +367,17 @@ function renderDomains() {
         }
         <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
         <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
-        <!-- **data-note を必ず渡す。** 渡さないと this.dataset.note が undefined になり、
+        <!-- data-note を必ず渡す。 渡さないと this.dataset.note が undefined になり、
              メモ欄が空のまま開いて「確認済みにする」がAIの書いたメモを空で上書きしていた -->
         ${!d.reviewed
-          ? `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'ok')" title="調べた結果、無害な通信だと分かった（怪しく見えただけ）">問題なし</button>
-             <button class="action-btn issue-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'issue')" title="調べた結果、問題のある通信だと分かった（ブロックされて当然）">問題あり</button>`
+          ? `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)" title="調べて納得した">確認済みにする</button>`
           : `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
         }
       </div>
     </div>
   `).join('');
 
-  // 開いている詳細も一緒に描き直す。**一覧を描き直す経路は全部ここを通る**ので、
+  // 開いている詳細も一緒に描き直す。一覧を描き直す経路は全部ここを通るので、
   // AIに聞いた・確認済みにした結果が詳細にも即座に映る（更新の呼び出しを散らさない）
   renderDetail();
 }
@@ -404,7 +391,7 @@ function toggleSelect(checkbox) {
 }
 
 function toggleSelectAll(checkbox) {
-  // **対象は「表示中」だけ**。フィルターで見えていない行まで選ぶと、
+  // 対象は「表示中」だけ。フィルターで見えていない行まで選ぶと、
   // 何を確認済みにしたのか押した人に分からない
   for (const d of filteredDomains()) {
     if (checkbox.checked) selectedDomains.add(d.domain); else selectedDomains.delete(d.domain);
@@ -417,7 +404,7 @@ function clearSelection() {
   renderDomains();
 }
 
-// バーの表示を一覧に合わせる。**一覧から消えた行の選択は落とす** ——
+// バーの表示を一覧に合わせる。一覧から消えた行の選択は落とす ——
 // 見えないものを確認済みにしないため
 function renderSelection(filtered) {
   const visible = new Set(filtered.map(d => d.domain));
@@ -428,15 +415,14 @@ function renderSelection(filtered) {
   const count = selectedDomains.size;
   document.getElementById('select-count').textContent = `${count} 件選択`;
   document.getElementById('select-review-btn').disabled = count === 0;
-  document.getElementById('select-issue-btn').disabled = count === 0;
   document.getElementById('select-clear-btn').disabled = count === 0;
   const all = document.getElementById('select-all');
   all.checked = filtered.length > 0 && count === filtered.length;
 }
 
-// チェックした行をまとめて確認済みにする。**メモは送らない** ——
+// チェックした行をまとめて確認済みにする。メモは送らない ——
 // サーバ側が「渡されなければ触らない」ので、AIに聞いた結果が消えない
-async function reviewSelected(verdict) {
+async function reviewSelected() {
   const domains = [...selectedDomains];
   if (domains.length === 0) return;
   const btn = document.getElementById('select-review-btn');
@@ -446,18 +432,18 @@ async function reviewSelected(verdict) {
     const resp = await fetch('/api/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains, verdict})
+      body: JSON.stringify({domains})
     });
     const result = await resp.json();
     if (result.success) {
       for (const domain of domains) {
         const item = allDomains.find(d => d.domain === domain);
-        if (item) { item.reviewed = true; item.verdict = verdict; }
+        if (item) item.reviewed = true;
       }
       selectedDomains.clear();
       updateStats();
       renderDomains();
-      showToast(`${result.count || domains.length} 件を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
+      showToast(`${result.count || domains.length} 件を確認済みにしました`, 'success');
       return;
     }
     showToast('保存できませんでした', 'error');
@@ -477,7 +463,6 @@ function openModal(domain, existingNote = '') {
   const item = allDomains.find(d => d.domain === domain);
   const decided = !!(item && item.reviewed);
   document.getElementById('modal-review-btn').hidden = decided;
-  document.getElementById('modal-issue-btn').hidden = decided;
   document.getElementById('modal').style.display = 'flex';
   document.getElementById('modal-note').focus();
 }
@@ -487,21 +472,21 @@ function closeModal() {
   pendingDomain = null;
 }
 
-// 覆いを押して閉じるのは **mousedown**（click ではない）。click は mousedown と mouseup が
-// 同じ要素で起きたときに発火し、押した場所と離した場所が違えば**共通の祖先**で発火する ——
+// 覆いを押して閉じるのは mousedown（click ではない）。click は mousedown と mouseup が
+// 同じ要素で起きたときに発火し、押した場所と離した場所が違えば共通の祖先で発火する ——
 // モーダルの中の文章をドラッグで選んで覆いの上で指を離すと、覆いで click が起きて閉じてしまい、
 // コピーしようとしただけで内容ごと消える。mousedown なら押した場所そのものが対象なので、
-// 中から始めたドラッグは外で離しても閉じない。**5つの覆いすべて同じ規則**。
+// 中から始めたドラッグは外で離しても閉じない。5つの覆いすべて同じ規則。
 function onOverlayMouseDown(event) {
   if (event.target === document.getElementById('modal')) closeModal();
 }
 
 // ---- 行を押して開く詳細 ----
-// **狭い画面ではここが本体。** 行にドメイン・メモ・操作を全部並べると、幅の足りない画面で
+// 狭い画面ではここが本体。 行にドメイン・メモ・操作を全部並べると、幅の足りない画面で
 // ドメインとメモが1文字ずつ縦に折り返して読めなくなる。行に出すのは要点だけにして、
 // 全文（特に相手ごとに何行にもなるメモ）と操作はここで読ませる。
 
-// 一覧は renderDomains() が innerHTML で作り直すので、**リスナーは入れ物に1回だけ付ける**
+// 一覧は renderDomains() が innerHTML で作り直すので、リスナーは入れ物に1回だけ付ける
 // （相手を選ぶモーダルの #ai-list と同じ流儀）
 document.getElementById('domain-list').addEventListener('click', event => {
   // ボタン・チェックボックスを押したときは詳細を開かない —— 行のどこを押しても開くと、
@@ -542,7 +527,7 @@ function renderDetail() {
     ${asking ? '<div class="detail-running">AIが調べています…（web検索を伴うので数十秒かかります）</div>' : ''}
     <div class="detail-domain">${escapeHtml(d.domain)}<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
     <div class="detail-meta">
-      ${d.reviewed ? verdictBadge(d) : '<span class="badge unreviewed">未確認</span>'}
+      ${d.reviewed ? reviewedBadge(d) : '<span class="badge unreviewed">未確認</span>'}
       <span>${d.reasons ? '直近' : 'ブロック'} ${d.count.toLocaleString('ja-JP')} 回</span>
     </div>
     ${reasonsHtml(d)}
@@ -552,9 +537,9 @@ function renderDetail() {
         <button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>
       </div>
       <div class="detail-research">${escapeHtml(d.research)}</div>
-      <!-- **調べた結果をもとに、もう一歩聞く。** 調査結果のすぐ下に置く ——
+      <!-- 調べた結果をもとに、もう一歩聞く。 調査結果のすぐ下に置く ——
            読んで浮かんだ疑問をその場で投げられるのが要点で、離すと入力欄を探すことになる。
-           **調査結果が無いときは出さない**（材料が無い深掘りは「詳しく調べる」の劣化版） -->
+           調査結果が無いときは出さない（材料が無い深掘りは「詳しく調べる」の劣化版） -->
       <div class="followup">
         <textarea class="followup-input" id="followup-input" rows="2"
                   placeholder="この結果について、さらに聞く（例: 止めたら何が使えなくなる？）"
@@ -567,7 +552,7 @@ function renderDetail() {
     <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
   `;
 
-  // 操作は行と同じ顔ぶれ。**行から消さない**（広い画面では行で完結するほうが速い）ので、
+  // 操作は行と同じ顔ぶれ。行から消さない（広い画面では行で完結するほうが速い）ので、
   // どちらから押しても同じ関数を通す
   document.getElementById('detail-actions').innerHTML = `
     <button class="action-btn cancel-btn" onclick="closeDetailModal()">閉じる</button>
@@ -578,13 +563,12 @@ function renderDetail() {
     <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)">${EDIT_ICON} メモを書く</button>
     ${d.reviewed
       ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
-      : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'ok')">問題なし</button>
-         <button class="action-btn issue-btn" data-domain="${escapeHtml(d.domain)}" onclick="setVerdict(this.dataset.domain, 'issue')">問題あり</button>`
+      : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)">確認済みにする</button>`
     }
   `;
 }
 
-// メモの編集は既存のモーダルに渡す。**詳細は先に閉じる** ——
+// メモの編集は既存のモーダルに渡す。詳細は先に閉じる ——
 // 同じ z-index の覆いを2枚重ねると、後ろの詳細を押して閉じられてしまう
 function editNoteFromDetail(domain, note) {
   closeDetailModal();
@@ -593,8 +577,8 @@ function editNoteFromDetail(domain, note) {
 
 
 // ---- 1件を詳しく調べる ----
-// **「まとめてAIに聞く」とは役割が違う。** あちらは何十件ぶんの1〜2文のメモを
-// 選んだ全員に書かせるもの。こちらは**メインのAI1人**に、web検索とPi-holeの観測データを
+// 「まとめてAIに聞く」とは役割が違う。 あちらは何十件ぶんの1〜2文のメモを
+// 選んだ全員に書かせるもの。こちらはメインのAI1人に、web検索とPi-holeの観測データを
 // 渡して1件を深く調べさせる。時間がかかる（web検索を伴うので数十秒〜数分）ぶん、
 // 押している間の見た目は行ごとに保つ（`askingDomains`）。
 // 結果はそのままメモになる（保存はサーバ側で済んでいる）。
@@ -609,7 +593,7 @@ async function askOne(domain) {
     const resp = await fetch('/api/investigate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      // **どちらの一覧から押したかを渡す。** 渡さないと、素通りしている通信まで
+      // どちらの一覧から押したかを渡す。 渡さないと、素通りしている通信まで
       // 「ブロックされたドメイン」として説明される。理由（観測した事実）も一緒に渡す
       body: JSON.stringify({
         domain,
@@ -635,13 +619,13 @@ async function askOne(domain) {
     if (item) {
       item.research = result.research;
       item.researched_at = result.researched_at || '';
-      // **メモが空だったときだけサーバが「ひとこと」を書いて返す。**
+      // メモが空だったときだけサーバが「ひとこと」を書いて返す。
       // 調べた結果は詳細画面でしか読めないので、それだけだと一覧に何も残らない。
       // 既にメモがあれば `note` は来ない（人の判断を上書きしないのはサーバ側の決まり）
       if (result.note) item.note = result.note;
     }
     renderDomains();
-    // **調べ終わったら詳細を開く。** 30秒待たせておいて結果をどこにも出さないと、
+    // 調べ終わったら詳細を開く。 30秒待たせておいて結果をどこにも出さないと、
     // 押した人は何が起きたのか分からない（開いていれば renderDetail が描き直す）
     if (detailDomain !== domain) openDetailModal(domain);
     showToast(`${domain} を調べました（${result.author || 'AI'}）`
@@ -654,12 +638,12 @@ async function askOne(domain) {
 }
 
 // ---- 調査結果をもとに、もう一歩聞く ----
-// **相手も材料も「詳しく調べる」と同じ**（メインの1人・web検索・観測データ）で、
-// 違うのは**これまでのやり取りと質問を渡す**ところ。答えは調査結果の末尾に足される
+// 相手も材料も「詳しく調べる」と同じ（メインの1人・web検索・観測データ）で、
+// 違うのはこれまでのやり取りと質問を渡すところ。答えは調査結果の末尾に足される
 // —— 1つ目の答えとその続きが離れると読めないし、次の質問に渡す材料も組み立てにくい。
 // 聞いている間の状態は `askingDomains` に相乗りする（「詳しく調べる」と同時に走らせない）
 
-// 書きかけを覚える。**関数を通す**（インラインの属性から変数へ直に代入すると、
+// 書きかけを覚える。関数を通す（インラインの属性から変数へ直に代入すると、
 // 同じ名前の属性が要素側にあったときに黙ってそちらへ入る）
 function setFollowupDraft(value) {
   followupDraft = value;
@@ -713,12 +697,12 @@ async function askFollowup() {
     return;
   }
 
-  // **失敗しても質問は消さない**（打ち直させない）
+  // 失敗しても質問は消さない（打ち直させない）
   renderDomains();
   showToast(`聞けませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
 }
 
-// 追記した答えは調査結果の末尾＝入力欄のすぐ上に付く。**入力欄を見えるところまで送る**
+// 追記した答えは調査結果の末尾＝入力欄のすぐ上に付く。入力欄を見えるところまで送る
 // —— 詳細はモーダルごとスクロールするので、動かすのは箱の中ではなく外。
 // 送らないと、描き直したときに前の内容が見えていて、答えが返ったのか分からない
 function scrollResearchToBottom() {
@@ -728,13 +712,13 @@ function scrollResearchToBottom() {
 
 // ---- まとめてAIに聞く ----
 // いま一覧に出ているドメインを BULK_CHUNK 件ずつAIに聞き、結果をメモとして残す。
-// **確認済みにはしない** —— 調べただけの段階と、人が確認した段階は別
+// 確認済みにはしない —— 調べただけの段階と、人が確認した段階は別
 
-// 対象は**未確認のうちメモが無いもの**。空いているところを埋めるのが既定の動き ——
+// 対象は未確認のうちメモが無いもの。空いているところを埋めるのが既定の動き ——
 // メモがあるものまで毎回聞き直すと、同じ答えを取り直すために枠と時間を使う。
-// **作り直しはチェックしたときだけ**（`bulk-regenerate`）。
-// **確認済みは触らない**（人が確認したメモをAIの文章で上書きしないため）。
-// **フィルターに関係なく未確認を見る**（表示を切り替えただけで対象が変わると分かりにくい）
+// 作り直しはチェックしたときだけ（`bulk-regenerate`）。
+// 確認済みは触らない（人が確認したメモをAIの文章で上書きしないため）。
+// フィルターに関係なく未確認を見る（表示を切り替えただけで対象が変わると分かりにくい）
 function bulkTargets() {
   const regenerate = bulkRegenerate();
   return allDomains
@@ -743,14 +727,14 @@ function bulkTargets() {
     .map(d => d.domain);
 }
 
-// 「すでにメモがあるものも作り直す」か。**覚えない** ——
+// 「すでにメモがあるものも作り直す」か。覚えない ——
 // 既定は「埋めるだけ」で、作り直しは押した回にだけ効いてほしい
 function bulkRegenerate() {
   const box = document.getElementById('bulk-regenerate');
   return !!(box && box.checked);
 }
 
-// 1回の実行で聞く上限。**覚えておく**（毎回入れ直させない）
+// 1回の実行で聞く上限。覚えておく（毎回入れ直させない）
 function bulkLimit() {
   const stored = parseInt(localStorage.getItem('bulkLimit'), 10);
   return Number.isFinite(stored) && stored > 0 ? stored : BULK_LIMIT_DEFAULT;
@@ -830,7 +814,7 @@ async function runBulkAsk() {
     note.textContent = `${i} / ${targets.length} 件おわり — ${chunk.length} 件を聞いています…`;
 
     // 候補に挙げた理由を一緒に渡す（監視モードのときだけ中身が入る）。
-    // **対応表で渡す** —— 並びで対応させると、サーバ側の重複・空白落としでずれる
+    // 対応表で渡す —— 並びで対応させると、サーバ側の重複・空白落としでずれる
     const reasons = {};
     for (const domain of chunk) {
       const text = reasonText(allDomains.find(d => d.domain === domain));
@@ -842,7 +826,7 @@ async function runBulkAsk() {
       const resp = await fetch('/api/ask', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        // **どちらの一覧かを渡す。** ブロック済みと監視では聞くことが違う
+        // どちらの一覧かを渡す。 ブロック済みと監視では聞くことが違う
         // （監視の候補に「ブロックされたと考えられます」と書かせない）
         body: JSON.stringify({domains: chunk, mode: currentMode, reasons})
       });
@@ -876,7 +860,7 @@ async function runBulkAsk() {
       }
     } else {
       failedChunks++;
-      // **1回の失敗で止めない**（相手が一度崩れた応答を返しても、残りは聞ける）
+      // 1回の失敗で止めない（相手が一度崩れた応答を返しても、残りは聞ける）
       bulkLog(`${chunk.length} 件が失敗: ${result.error || '不明なエラー'}`, 'failed');
     }
     // サーバ側でメモは保存済み。押した人が結果を追えるよう、区切りごとに一覧へ反映する
@@ -922,9 +906,9 @@ function aiName() {
 
 function renderAiButton() {
   const names = aiNames();
-  // **ボタンに出すのはメインの相手**（サーバが先頭にそろえて返す）+ 残りの人数。
-  // 全員並べるとツールバーが名前で埋まるし、**普段いちばん信用している相手が
-  // 出ていないとボタンを見る意味が薄い**
+  // ボタンに出すのはメインの相手（サーバが先頭にそろえて返す）+ 残りの人数。
+  // 全員並べるとツールバーが名前で埋まるし、普段いちばん信用している相手が
+  // 出ていないとボタンを見る意味が薄い
   const btn = document.getElementById('ai-btn');
   btn.textContent = `AI: ${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ''}`;
   btn.title = names.length > 1
@@ -950,7 +934,7 @@ function onAiOverlayMouseDown(event) {
   if (event.target === document.getElementById('ai-modal')) closeAiModal();
 }
 
-// 「詳しく調べる」を頼む1人を選ぶラジオ。**チェック（まとめて聞く相手）とは別の軸**なので、
+// 「詳しく調べる」を頼む1人を選ぶラジオ。チェック（まとめて聞く相手）とは別の軸なので、
 // 同じ行に並べて役割の違いを名前で示す
 function primaryRadio(backend, current) {
   const checked = backend === current ? 'checked' : '';
@@ -994,10 +978,10 @@ function renderAiList() {
       + '<br>どちらも再起動なしで切り替わります。';
   }
 
-  // 選択は複数。**保存済みの選択から、相手ごとのモデル・考える量を引く**
+  // 選択は複数。保存済みの選択から、相手ごとのモデル・考える量を引く
   const chosen = new Map((aiState.selections || []).map(sel => [sel.backend, sel]));
-  // 先頭は従来の経路。**消さずに残す** —— Chiezoが落ちている日にも聞けるようにするため。
-  // **これも選択肢の1つ**なので、Chiezoの相手と一緒に選べる（両方に聞いて読み比べられる）
+  // 先頭は従来の経路。消さずに残す —— Chiezoが落ちている日にも聞けるようにするため。
+  // これも選択肢の1つなので、Chiezoの相手と一緒に選べる（両方に聞いて読み比べられる）
   const rows = [`
     <div class="ai-row">
       <label class="ai-row-main">
@@ -1006,7 +990,7 @@ function renderAiList() {
         <span class="ai-row-name">${escapeHtml(aiState.cli_label)}</span>
       </label>
       ${primaryRadio(aiState.cli_backend, aiState.primary)}
-      <!-- トークンの設定はこの行の中。**値は出さない**（登録済みかどうかだけ隣に出す） -->
+      <!-- トークンの設定はこの行の中。値は出さない（登録済みかどうかだけ隣に出す） -->
       <div class="ai-row-opts">
         <span class="ai-row-hint">トークン: ${aiState.token_saved ? '登録済み' : '未登録'}</span>
         <input type="password" class="ai-token" id="token-input" autocomplete="off"
@@ -1046,7 +1030,7 @@ function renderAiList() {
 }
 
 async function saveAiSelection() {
-  // **チェックした全員を送る。** 0人なら「未選択」= CLIブリッジに戻る
+  // チェックした全員を送る。 0人なら「未選択」= CLIブリッジに戻る
   const primary = document.querySelector('input[name="ai-primary"]:checked');
   const selections = [...document.querySelectorAll('input[name="ai-backend"]:checked')].map(box => {
     const backend = box.value;
@@ -1101,7 +1085,7 @@ async function saveToken() {
     });
     const result = await resp.json();
     if (result.success) {
-      // 「登録済み」の表示を取り直す。**保存の副作用でAIを呼ばない**
+      // 「登録済み」の表示を取り直す。保存の副作用でAIを呼ばない
       // （枠を使う操作は、押した人が改めて押して始める）
       aiModalMessage = null;
       await loadAi();
@@ -1118,37 +1102,94 @@ async function saveToken() {
 }
 
 // ---- 設定（ネットワークの確認） ----
-// **一覧の判定には関わらない道具。** 一覧に並ぶのは「名前を引いた記録」だけなので、
+// 一覧の判定には関わらない道具。 一覧に並ぶのは「名前を引いた記録」だけなので、
 // その先に本当に届くのかは分からない —— 実際にパケットを出して確かめる場所を用意する。
 // 相手先の確かめとコマンドの組み立てはサーバ側（src/diag.rs）。画面は文字を渡すだけ
 
-function openSettingsModal(target) {
-  const field = document.getElementById('diag-target');
-  // 呼び出し元が相手先を渡してきたら入れておく（詳細から開く導線を足すときのため）
-  if (target) field.value = target;
-  document.getElementById('settings-modal').style.display = 'flex';
-  field.focus();
+// ---- ページの切り替え（ドメイン / 設定）----
+// URL のハッシュで持つ。 戻る/進むとブックマークをそのまま効かせるため
+// （JS でボタンを押し替える作りだと、どちらも効かない）。
+// 知らないハッシュはドメインに倒す —— 白い画面を出さない
+const PAGES = ['domains', 'settings'];
+let currentPage = 'domains';
+
+function pageFromHash() {
+  const name = (location.hash || '').replace(/^#/, '');
+  return PAGES.includes(name) ? name : 'domains';
 }
 
-function closeSettingsModal() {
-  document.getElementById('settings-modal').style.display = 'none';
+function applyPage() {
+  currentPage = pageFromHash();
+  for (const name of PAGES) {
+    document.getElementById(`page-${name}`).hidden = name !== currentPage;
+    document.getElementById(`page-btn-${name}`).classList.toggle('active', name === currentPage);
+  }
+  // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになる
+  if (currentPage === 'settings') loadSettings();
 }
 
-function onSettingsOverlayMouseDown(event) {
-  if (event.target === document.getElementById('settings-modal')) closeSettingsModal();
+window.addEventListener('hashchange', applyPage);
+
+// ---- 設定：Pi-holeから取り込む件数 ----
+
+function setQueryLimitStatus(message, kind) {
+  const el = document.getElementById('query-limit-status');
+  el.textContent = message;
+  el.className = `settings-status ${kind || ''}`;
 }
 
+async function loadSettings() {
+  try {
+    const resp = await fetch('/api/settings');
+    const data = await resp.json();
+    document.getElementById('query-limit').value = data.query_limit;
+    setQueryLimitStatus('');
+  } catch(e) {
+    setQueryLimitStatus('設定を読み込めませんでした', 'error');
+  }
+}
+
+async function saveQueryLimit() {
+  const raw = document.getElementById('query-limit').value.trim();
+  const value = Number(raw);
+  // 数でないものは送らない（サーバ側でも断るが、押した直後に理由が出るほうが早い）
+  if (!raw || !Number.isInteger(value)) {
+    setQueryLimitStatus('整数で入れてください（-1 で全件）', 'error');
+    return;
+  }
+  const btn = document.getElementById('query-limit-save');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query_limit: value})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      setQueryLimitStatus(value === -1 ? '保存しました（全件を取り込みます）' : `保存しました（${value} 件まで）`, 'ok');
+      showToast('設定を保存しました', 'success');
+    } else {
+      setQueryLimitStatus(result.error || '保存できませんでした', 'error');
+    }
+  } catch(e) {
+    setQueryLimitStatus('通信に失敗しました', 'error');
+  }
+  btn.disabled = false;
+}
+
+// ---- 疎通の確認（ping / 経路）----
 // 打っている間は両方のボタンを止める（同時に走らせない）
 function setDiagRunning(running) {
   document.getElementById('diag-ping-btn').disabled = running;
   document.getElementById('diag-trace-btn').disabled = running;
 }
 
-// **途中経過を1行ずつ出す**（NDJSON）。ping は4回・経路は応答しないホップがあると
+// 途中経過を1行ずつ出す（NDJSON）。ping は4回・経路は応答しないホップがあると
 // 数十秒かかるので、終わるまで待つと「打てているのか」が画面から分からない。
 //
-// **行は配列で持ち直す。** 名前（`name`）は経路が出そろってから届いて**既に出した行に
-// 足される**ので、文字列に継ぎ足していく作りだと書き足す先を指せない。
+// 行は配列で持ち直す。 名前（`name`）は経路が出そろってから届いて既に出した行に
+// 足されるので、文字列に継ぎ足していく作りだと書き足す先を指せない。
 async function runDiag(tool) {
   const target = document.getElementById('diag-target').value.trim();
   const commandBox = document.getElementById('diag-command');
@@ -1165,8 +1206,8 @@ async function runDiag(tool) {
   const names = [];
   let command = '';
 
-  // **名前はIPのすぐ後ろに差し込む。** 行末に足すと、桁を揃えるための空白のぶんだけ
-  // 右へ流れて**画面の外に出る**（出力の箱は横スクロールなので、横に送らないと読めない。
+  // 名前はIPのすぐ後ろに差し込む。 行末に足すと、桁を揃えるための空白のぶんだけ
+  // 右へ流れて画面の外に出る（出力の箱は横スクロールなので、横に送らないと読めない。
   // 実測：名前は68字目から始まるが、設定のモーダルに入るのは62字ほど）。
   // 続く空白を名前のぶんだけ詰めるので、応答時間の桁はたいてい動かない
   // —— tracepath はIPの後ろに40字ほど空けている
@@ -1183,7 +1224,7 @@ async function runDiag(tool) {
   };
 
   const render = () => {
-    // **一番下を見ていたときだけ追いかける**（上を読み返している最中に引き戻さない）
+    // 一番下を見ていたときだけ追いかける（上を読み返している最中に引き戻さない）
     const atBottom = outputBox.scrollTop + outputBox.clientHeight >= outputBox.scrollHeight - 4;
     outputBox.hidden = false;
     outputBox.textContent = lines.map(withName).join('\n');
@@ -1201,18 +1242,18 @@ async function runDiag(tool) {
       names[event.index] = {ip: event.ip, name: event.name};
       render();
     } else if (event.t === 'end') {
-      // 走らせたコマンドと、かかった時間を添える。**終了コードが0でなくても結果は出す**
+      // 走らせたコマンドと、かかった時間を添える。終了コードが0でなくても結果は出す
       // （応答が無いのも結果のうち）
       commandBox.textContent = `$ ${command}（${(event.elapsed_ms / 1000).toFixed(1)}秒`
         + `${event.ok ? '' : ' / 応答なしか失敗'}）`;
       if (!lines.length) { outputBox.hidden = false; outputBox.textContent = '（出力はありませんでした）'; }
     } else if (event.t === 'error') {
-      // **理由は画面に残す**（トーストは消えるので、打ち直すときに読めない）
+      // 理由は画面に残す（トーストは消えるので、打ち直すときに読めない）
       commandBox.textContent = event.message;
     }
   };
 
-  // 受け取ったぶんを行で切って読む。**チャンクの切れ目は行の途中にも来る**ので、
+  // 受け取ったぶんを行で切って読む。チャンクの切れ目は行の途中にも来るので、
   // 最後の改行までを処理して残りは次のチャンクへ持ち越す
   let buffer = '';
   const consume = chunk => {
@@ -1249,7 +1290,7 @@ async function runDiag(tool) {
       }
       consume(decoder.decode());
     } else {
-      // 途中経過が読めない環境（古いブラウザ）。**打てないよりはよい** ——
+      // 途中経過が読めない環境（古いブラウザ）。打てないよりはよい ——
       // 全部届いてから同じ手順で流し込む
       consume(await resp.text());
     }
@@ -1260,10 +1301,10 @@ async function runDiag(tool) {
 }
 
 // ---- 下に引っ張って更新 ----
-// **スマホで一番よく使う操作。** 「更新」ボタンは上のツールバーにあるので、
+// スマホで一番よく使う操作。 「更新」ボタンは上のツールバーにあるので、
 // 一覧を下まで読んだ後だと戻る手間がかかる。
 // 引っ張った量だけ印を降ろし、しきい値を超えて離したら読み直す。
-// **一番上にいるときだけ**反応させる（一覧の途中で下向きに動かしたら普通のスクロール）
+// 一番上にいるときだけ反応させる（一覧の途中で下向きに動かしたら普通のスクロール）
 
 const PULL_TRIGGER_PX = 70;   // これを超えて離したら読み直す
 const PULL_MAX_PX = 110;      // これ以上は降ろさない（引っ張り続けても伸びない）
@@ -1299,7 +1340,9 @@ function anyModalOpen() {
 
 document.addEventListener('touchstart', e => {
   if (e.touches.length !== 1 || anyModalOpen()) return;
-  // **一番上にいるときだけ**始める（途中から始めると普通のスクロールを邪魔する）
+  // 一覧を出しているときだけ。 設定のページで引っ張っても読み直すものが無い
+  if (currentPage !== 'domains') return;
+  // 一番上にいるときだけ始める（途中から始めると普通のスクロールを邪魔する）
   if (window.scrollY > 0) return;
   pullStartY = e.touches[0].clientY;
   pullDistance = 0;
@@ -1311,7 +1354,7 @@ document.addEventListener('touchmove', e => {
   if (delta <= 0 || window.scrollY > 0) { resetPull(); return; }
   // 引っ張るほど重くする（そのまま動かすと指に貼り付いて行き過ぎる）
   pullDistance = Math.min(delta * 0.5, PULL_MAX_PX);
-  // **ブラウザ自前の引っ張り更新を止める。** 止めないと二重に走る
+  // ブラウザ自前の引っ張り更新を止める。 止めないと二重に走る
   // （このリスナーは passive: false でないと preventDefault が効かない）
   if (e.cancelable) e.preventDefault();
   renderPull(pullDistance, pullDistance >= PULL_TRIGGER_PX);
@@ -1334,9 +1377,9 @@ document.addEventListener('touchend', () => {
 // 指が画面から外れた（着信など）ときに印が出たままにならないように
 document.addEventListener('touchcancel', resetPull, {passive: true});
 
-// **`navigator.clipboard` は安全なコンテキスト（https か localhost）でしか使えない。**
+// `navigator.clipboard` は安全なコンテキスト（https か localhost）でしか使えない。
 // このアプリは LAN の IP に http で開くのが普通なので、その場合 API 自体が存在せず、
-// **押しても何も起きない**（実際そうなっていた）。古い経路（一時的な textarea への
+// 押しても何も起きない（実際そうなっていた）。古い経路（一時的な textarea への
 // 選択 + execCommand）に落として、どちらでもコピーできるようにする。
 // それも駄目なら黙らずに理由を出す —— 押した結果が分からないのが一番困る
 function copyText(btn, text) {
@@ -1357,7 +1400,7 @@ function copyText(btn, text) {
   else showToast('コピーできませんでした（手で選択してください）', 'error');
 }
 
-// 安全なコンテキストでないときの経路。**画面の外に置いた textarea を選んで実行する**
+// 安全なコンテキストでないときの経路。画面の外に置いた textarea を選んで実行する
 // （見えるところに置くと一瞬ちらつく）
 function legacyCopy(text) {
   const area = document.createElement('textarea');
@@ -1377,7 +1420,7 @@ function copyDomain(btn) {
   copyText(btn, btn.dataset.domain);
 }
 
-// 調査結果をまるごとコピーする。**本文は属性に載せない** ——
+// 調査結果をまるごとコピーする。本文は属性に載せない ——
 // 見出し付きで何行にもなるので、一覧から引く（行の DOM を重くしない）
 function copyResearch(btn) {
   const item = allDomains.find(d => d.domain === btn.dataset.domain);
@@ -1385,22 +1428,22 @@ function copyResearch(btn) {
   copyText(btn, item.research);
 }
 
-// 判定を1件つける。**メモは送らない** ——
+// 1件を確認済みにする。メモは送らない ——
 // サーバ側が「渡されなければ触らない」ので、AIに聞いた結果や自分で書いたメモが消えない
-async function setVerdict(domain, verdict) {
+async function markReviewed(domain) {
   try {
     const resp = await fetch('/api/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains: [domain], verdict})
+      body: JSON.stringify({domains: [domain]})
     });
     const result = await resp.json();
     if (result.success) {
       const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = true; item.verdict = verdict; }
+      if (item) item.reviewed = true;
       updateStats();
       renderDomains();
-      showToast(`${domain} を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
+      showToast(`${domain} を確認済みにしました`, 'success');
     } else {
       showToast('保存できませんでした', 'error');
     }
@@ -1419,7 +1462,7 @@ async function unmarkReviewed(domain) {
     const result = await resp.json();
     if (result.success) {
       const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = false; item.verdict = ''; item.note = ''; }
+      if (item) { item.reviewed = false; item.note = ''; }
       updateStats();
       renderDomains();
       showToast(`${domain} を未確認に戻しました`, 'success');
@@ -1463,7 +1506,7 @@ async function saveNote(domain, note, successMessage) {
   return false;
 }
 
-async function submitReview(verdict) {
+async function submitReview() {
   if (!pendingDomain) return;
   const domain = pendingDomain;
   const note = document.getElementById('modal-note').value.trim();
@@ -1473,15 +1516,15 @@ async function submitReview(verdict) {
     const resp = await fetch('/api/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({domains: [domain], note, verdict})
+      body: JSON.stringify({domains: [domain], note})
     });
     const result = await resp.json();
     if (result.success) {
       const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = true; item.verdict = verdict; item.note = note; }
+      if (item) { item.reviewed = true; item.note = note; }
       updateStats();
       renderDomains();
-      showToast(`${domain} を「${verdict === 'issue' ? '問題あり' : '問題なし'}」にしました`, 'success');
+      showToast(`${domain} を確認済みにしました`, 'success');
     } else {
       showToast('失敗しました', 'error');
     }
@@ -1498,17 +1541,17 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); closeSettingsModal(); }
+  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
     if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();
-    // 詳細の追加質問。**書きかけがあるときだけ**（開いているだけで反応させない）
+    // 詳細の追加質問。書きかけがあるときだけ（開いているだけで反応させない）
     if (detailDomain && (followupDraft || '').trim()) askFollowup();
   }
 });
 
 // モデル・考える量をいじったら、その行を選んだものとして扱う（選び直しの手数を減らす）。
-// **一覧はinnerHTMLで差し替えるので、リスナーは入れ物に1回だけ付ける**
+// 一覧はinnerHTMLで差し替えるので、リスナーは入れ物に1回だけ付ける
 document.getElementById('ai-list').addEventListener('change', e => {
   // モデル・考える量をいじったら、その行を選んだものとして扱う（選び直しの手数を減らす）
   if (e.target.tagName === 'SELECT') {
@@ -1516,7 +1559,7 @@ document.getElementById('ai-list').addEventListener('change', e => {
     if (box) box.checked = true;
     return;
   }
-  // **メインに選んだ相手はチェックも立てる。** 立てないと「メインなのに聞く相手に
+  // メインに選んだ相手はチェックも立てる。 立てないと「メインなのに聞く相手に
   // 入っていない」状態を保存でき、サーバ側で選択から落ちてメインが別の人にずれる
   if (e.target.name === 'ai-primary') {
     const box = document.querySelector(`input[name="ai-backend"][value="${e.target.value}"]`);
@@ -1525,5 +1568,6 @@ document.getElementById('ai-list').addEventListener('change', e => {
 });
 
 renderTheme();
+applyPage();
 loadDomains();
 loadAi();

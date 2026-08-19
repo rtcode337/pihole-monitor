@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <script>
-// 選んだテーマを**描画の前**に当てる。body の側で当てると、一瞬もう一方の色が出てしまう
+// 選んだテーマを描画の前に当てる。body の側で当てると、一瞬もう一方の色が出てしまう
 // （app.js は末尾で読み込まれるため）。保存が無ければ data-theme を付けず、OS の設定に従う
 (function () {
   try {
@@ -26,7 +26,7 @@
 </head>
 <body>
 
-<!-- 下に引っ張ったときの印。**一番上に固定して置く** ——
+<!-- 下に引っ張ったときの印。一番上に固定して置く ——
      引っ張った量だけ降りてきて、離すと読み直す（app.js の pull-to-refresh） -->
 <div class="pull-indicator" id="pull-indicator" aria-hidden="true">
   <span class="pull-arrow" id="pull-arrow">&#8595;</span>
@@ -36,9 +36,18 @@
 <header>
   <div class="logo"></div>
   <h1>Pi-hole <span>Monitor</span></h1>
+  <!-- ページの切り替え。リンク（`#`）にしてある —— 戻る/進むもブックマークも
+       そのまま効く（JSでボタンを押し替える作りだと、どちらも効かない） -->
+  <nav class="pagenav">
+    <a class="page-btn" id="page-btn-domains" href="#domains">ドメイン</a>
+    <a class="page-btn" id="page-btn-settings" href="#settings">設定</a>
+  </nav>
   <!-- 中身（太陽/月）は app.js が入れる。押すと切り替わる先の印を出す -->
   <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" aria-label="テーマを切り替える"></button>
 </header>
+
+<!-- ドメインのページ。ヘッダーの「ドメイン / 設定」で入れ替える -->
+<div id="page-domains">
 
 <div class="stats">
   <div class="stat">
@@ -46,7 +55,6 @@
     <div class="stat-label">未確認</div>
   </div>
   <div class="stat">
-    <!-- 仕分けが済んだ件数（問題あり + 問題なし）。内訳は絞り込みで見る -->
     <div class="stat-value ok" id="stat-reviewed">-</div>
     <div class="stat-label">確認済み</div>
   </div>
@@ -56,18 +64,18 @@
   </div>
 </div>
 
-<!-- 上段のタブ。**2つの画面は材料も判定も違う** ——
+<!-- 上段のタブ。2つの画面は材料も判定も違う ——
      ブロック済みはPi-holeをその場で叩いた集計、監視は貯めた過去との突き合わせ -->
 <div class="modebar">
   <button class="mode-btn active" id="mode-blocked" onclick="setMode('blocked', event)">ブロック済み</button>
   <button class="mode-btn" id="mode-watch" onclick="setMode('watch', event)">未ブロックの監視</button>
 </div>
 
-<!-- 監視モードのときだけ出す前置き。**「どこまで見えているか」を必ず添える** ——
+<!-- 監視モードのときだけ出す前置き。「どこまで見えているか」を必ず添える ——
      貯まっていない時期に「0件」と出ると、平穏なのか材料が無いのか区別できない -->
 <div class="watch-context" id="watch-context" hidden></div>
 
-<!-- 監視の基準日時。**ネットワークの設定を変えた日に押す** ——
+<!-- 監視の基準日時。ネットワークの設定を変えた日に押す ——
      変える前の通信は別の環境の記録で、同じ画面に混ぜるとノイズにしかならない -->
 <div class="watch-baseline" id="watch-baseline" hidden>
   <label for="baseline-at">この日時より後だけを見る</label>
@@ -79,19 +87,17 @@
 
 <div class="toolbar">
   <button class="filter-btn active" onclick="setFilter('new', event)">未確認</button>
-  <button class="filter-btn" onclick="setFilter('issue', event)">問題あり</button>
-  <button class="filter-btn" onclick="setFilter('ok', event)">問題なし</button>
+  <button class="filter-btn" onclick="setFilter('reviewed', event)">確認済み</button>
   <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
   <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
        押す前に知りたいので、名前を隠して歯車だけにはしない。
-       **右端の3つは「相手 → まとめて聞く → 更新」の順**（設定 → 実行 → 読み直し） -->
+       右端の3つは「相手 → まとめて聞く → 更新」の順（設定 → 実行 → 読み直し） -->
   <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
   <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
-  <button class="settings-btn" onclick="openSettingsModal()" title="設定・ネットワークの確認（ping / 経路）">&#9881; 設定</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
 
-<!-- チェックした行の一括操作。**選択が0でも出す** ——
+<!-- チェックした行の一括操作。選択が0でも出す ——
      ここに「全選択」があるので、隠すと選び始める入口が無くなる -->
 <div class="select-bar">
   <label class="select-all">
@@ -99,14 +105,54 @@
     表示中を全選択
   </label>
   <span class="select-count" id="select-count">0 件選択</span>
-  <button class="action-btn ok-btn" id="select-review-btn" onclick="reviewSelected('ok')" disabled>選択を問題なしに</button>
-  <button class="action-btn issue-btn" id="select-issue-btn" onclick="reviewSelected('issue')" disabled>選択を問題ありに</button>
+  <button class="action-btn ok-btn" id="select-review-btn" onclick="reviewSelected()" disabled>選択を確認済みに</button>
   <button class="action-btn cancel-btn" id="select-clear-btn" onclick="clearSelection()" disabled>選択を解除</button>
 </div>
 
 <div class="domain-list" id="domain-list">
   <div class="loading">読み込み中...</div>
 </div>
+
+</div><!-- /page-domains -->
+
+<!-- 設定のページ。モーダルではなくページにしてある ——
+     ping / 経路の結果は数十行になるので、一覧に重ねると読むところが狭い -->
+<div id="page-settings" hidden>
+
+  <div class="settings-section">
+    <div class="detail-label">Pi-holeから取り込む件数</div>
+    <div class="settings-note">
+      ブロック済みクエリを何件まで取り込むか。<strong>-1 で全件</strong>。
+      少なくすると新しいものから打ち切られ、<strong>一覧が途中までしか出なくなる</strong>ので、
+      Pi-holeの応答が重いときだけ絞る。<strong>次の更新から効く</strong>（再起動は要らない）。
+    </div>
+    <div class="diag-row">
+      <input type="number" id="query-limit" class="diag-input" min="-1" step="1" aria-label="取り込む件数">
+      <button class="action-btn review-btn" id="query-limit-save" onclick="saveQueryLimit()">保存</button>
+      <span class="settings-status" id="query-limit-status"></span>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="detail-label">ネットワークの確認</div>
+    <div class="settings-note">
+      ホスト名かIPを入れて、このアプリが動いているところから疎通を確かめます。
+      <strong>結果はこのアプリから見た経路</strong>で、端末から見たものとは違うことがあります。
+    </div>
+    <div class="diag-row">
+      <!-- Enter は ping（いちばんよく打つほうに割り当てる） -->
+      <input type="text" id="diag-target" class="diag-input" autocomplete="off"
+             onkeydown="if (event.key === 'Enter') runDiag('ping')"
+             placeholder="example.com / 192.168.1.10" aria-label="相手先">
+      <button class="action-btn review-btn" id="diag-ping-btn" onclick="runDiag('ping')">ping</button>
+      <button class="action-btn review-btn" id="diag-trace-btn" onclick="runDiag('traceroute')">経路</button>
+    </div>
+    <!-- 走らせたコマンドも出す。何をした結果なのか分からないと読めない -->
+    <div class="diag-command" id="diag-command" hidden></div>
+    <pre class="diag-output" id="diag-output" hidden></pre>
+  </div>
+
+</div><!-- /page-settings -->
 
 <div class="toast" id="toast"></div>
 
@@ -117,16 +163,15 @@
     <textarea id="modal-note" class="modal-note" placeholder="メモ（確認済みにしなくても残せます）"></textarea>
     <div class="modal-actions">
       <button class="action-btn cancel-btn" onclick="closeModal()">キャンセル</button>
-      <!-- メモだけ残すのと、判定を付けるのは別の操作。
-           判定済みのドメインには判定のボタンを出さない（app.js が隠す） -->
+      <!-- メモだけ残すのと、確認済みにするのは別の操作。
+           確認済みのドメインには確認済みのボタンを出さない（app.js が隠す） -->
       <button class="action-btn review-btn" onclick="submitNote()">メモを保存</button>
-      <button class="action-btn ok-btn" id="modal-review-btn" onclick="submitReview('ok')" title="怪しく見えたが無害だった">保存して問題なし</button>
-      <button class="action-btn issue-btn" id="modal-issue-btn" onclick="submitReview('issue')" title="問題のある通信だった（ブロックされて当然）">保存して問題あり</button>
+      <button class="action-btn ok-btn" id="modal-review-btn" onclick="submitReview()" title="調べて納得した">保存して確認済み</button>
     </div>
   </div>
 </div>
 
-<!-- 行を押すと開く詳細。**狭い画面ではここが本体** —— 行に全部を並べると
+<!-- 行を押すと開く詳細。狭い画面ではここが本体 —— 行に全部を並べると
      ドメインとメモの幅が潰れて読めなくなるので、全文と操作をここで受け持つ。
      中身（状態・ブロック回数・メモ・操作）はJSが組む -->
 <div class="modal-overlay" id="detail-modal" style="display:none" onmousedown="onDetailOverlayMouseDown(event)">
@@ -142,14 +187,14 @@
   <div class="modal">
     <div class="modal-title">まとめてAIに聞く</div>
     <div class="bulk-note" id="bulk-note"></div>
-    <!-- 1回の実行で聞く件数の上限。**未確認は常に全件聞き直す**ので、
+    <!-- 1回の実行で聞く件数の上限。未確認は常に全件聞き直すので、
          枠と時間を使いすぎないための歯止めがここに要る（覚えておく） -->
     <label class="bulk-limit">
       1回に聞く上限
       <input type="number" id="bulk-limit" min="1" max="500" step="1" onchange="saveBulkLimit(this)">
       件
     </label>
-    <!-- **既定は「空いているところを埋める」。** メモがあるものまで毎回聞き直すと、
+    <!-- 既定は「空いているところを埋める」。 メモがあるものまで毎回聞き直すと、
          同じ答えを取り直すために枠と時間を使う。作り直しは明示したときだけ -->
     <label class="bulk-regen">
       <input type="checkbox" id="bulk-regenerate" onchange="openBulkModal()">
@@ -181,37 +226,6 @@
   </div>
 </div>
 
-<!-- 設定。いまの中身はネットワークの確認（ping / 経路）だけ。
-     **一覧の判定には関わらない** —— 名前を引いた記録だけでは「その先に届くのか」が
-     分からないので、手で叩ける場所を用意してある -->
-<div class="modal-overlay" id="settings-modal" style="display:none" onmousedown="onSettingsOverlayMouseDown(event)">
-  <div class="modal">
-    <div class="modal-title">設定</div>
-
-    <div class="settings-section">
-      <div class="detail-label">ネットワークの確認</div>
-      <div class="settings-note">
-        ホスト名かIPを入れて、このアプリが動いているところから疎通を確かめます。
-        <strong>結果はこのアプリから見た経路</strong>で、端末から見たものとは違うことがあります。
-      </div>
-      <div class="diag-row">
-        <!-- Enter は ping（いちばんよく打つほうに割り当てる） -->
-        <input type="text" id="diag-target" class="diag-input" autocomplete="off"
-               onkeydown="if (event.key === 'Enter') runDiag('ping')"
-               placeholder="example.com / 192.168.1.10" aria-label="相手先">
-        <button class="action-btn review-btn" id="diag-ping-btn" onclick="runDiag('ping')">ping</button>
-        <button class="action-btn review-btn" id="diag-trace-btn" onclick="runDiag('traceroute')">経路</button>
-      </div>
-      <!-- 走らせたコマンドも出す。何をした結果なのか分からないと読めない -->
-      <div class="diag-command" id="diag-command" hidden></div>
-      <pre class="diag-output" id="diag-output" hidden></pre>
-    </div>
-
-    <div class="modal-actions">
-      <button class="action-btn cancel-btn" onclick="closeSettingsModal()">閉じる</button>
-    </div>
-  </div>
-</div>
 
 <script src="/static/js/app.js"></script>
 </body>

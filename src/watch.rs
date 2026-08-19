@@ -1,13 +1,13 @@
 //! 「ブロックされていない怪しい通信」の候補を組み立てる。
 //!
-//! **ブロック済みの一覧(`/api/domains`)と役割が違う。** あちらは Pi-hole が既に止めたものを
-//! 「なぜ止まったか」で確かめる画面だが、こちらは**素通りしているものの中から、
-//! 目を向ける価値のあるものだけを拾う**。全部を並べたら1日1,300ドメインになって読めない。
+//! ブロック済みの一覧(`/api/domains`)と役割が違う。 あちらは Pi-hole が既に止めたものを
+//! 「なぜ止まったか」で確かめる画面だが、こちらは素通りしているものの中から、
+//! 目を向ける価値のあるものだけを拾う。全部を並べたら1日1,300ドメインになって読めない。
 //!
-//! **判定はコードでやり、AIには渡さない。** 候補を絞ってから「これは何か」を聞くのが
+//! 判定はコードでやり、AIには渡さない。 候補を絞ってから「これは何か」を聞くのが
 //! 既存の「AIに聞く」で、全ドメインを投げると枠を使い切るだけで精度も上がらない。
 //!
-//! いまの手は5つ。**どれも「いつもと違う」の言い換え**なので、比較対象(ingest.rs が
+//! いまの手は5つ。どれも「いつもと違う」の言い換えなので、比較対象(ingest.rs が
 //! 貯めた過去)が無いと成立しない。
 //!
 //! | 手 | 何を捕まえるか | 誤検知の出方 |
@@ -18,12 +18,12 @@
 //! | 周期(ビーコン) | C2、常時テレメトリ | ルーターの死活確認・更新確認 |
 //! | ラベルの形 | DNSトンネリング、DGA | CDN・クラウドのホスト名 |
 //!
-//! **しきい値の説明は [`methods`] がコードから組み立てて画面へ返す。**
+//! しきい値の説明は [`methods`] がコードから組み立てて画面へ返す。
 //! 散文で別に書くと、定数をいじったときに説明だけが古くなる。
 //!
 //! 各理由には [`QueryFilter`](Reason::filter) が付いていて、画面はそれを
 //! Pi-hole のクエリログ(`/admin/queries.lp`)の絞り込みリンクにする ——
-//! **「本当にそうなっているか」は元の通信を見るのが一番早い**。
+//! 「本当にそうなっているか」は元の通信を見るのが一番早い。
 
 use std::collections::HashMap;
 
@@ -32,30 +32,30 @@ use serde::Serialize;
 
 use crate::db::Db;
 
-/// 基準日時が未設定のときに見る窓(秒)。**初出もNXDOMAINもこの窓で数える。**
+/// 基準日時が未設定のときに見る窓(秒)。初出もNXDOMAINもこの窓で数える。
 /// 長くすると候補が増えて読めなくなり、短くすると寝ている間の出来事を見落とす。
 const WINDOW_SECS: f64 = 24.0 * 3600.0;
 
 /// 基準日時の置き場(`settings` 表のキー)。値は unix 秒。
 ///
-/// **ネットワークの設定を変えた日の前後は、同じ画面に別の環境の記録が混ざる。**
+/// ネットワークの設定を変えた日の前後は、同じ画面に別の環境の記録が混ざる。
 /// 例えばDHCPが配るDNSを変えると、変える前の通信はぜんぶルーター発として記録されていて、
-/// 変えた後の「どの端末が」とは噛み合わない。**そこを境に切れる**ようにしてある。
+/// 変えた後の「どの端末が」とは噛み合わない。そこを境に切れるようにしてある。
 pub const BASELINE_KEY: &str = "watch:baseline";
 
 /// NXDOMAIN を「多発」と呼ぶ下限。1〜2回は打ち間違いや一時的な失敗で普通に出る。
 const NXDOMAIN_MIN: i64 = 5;
 
-/// 珍しい種別を「出ている」と呼ぶ下限。**1回では挙げない** ——
+/// 珍しい種別を「出ている」と呼ぶ下限。1回では挙げない ——
 /// 実測で `push.apple.com` の TXT が1回だけ出て候補になったが、
 /// これは判断のしようがないノイズだった。DNSトンネリングは同じ種別を何百回と使うので、
 /// この下限で取り逃がすものは無い。
 const RARE_QTYPE_MIN: i64 = 5;
 
-/// 平常の形として扱うクエリ種別。**ここに無い種別が出たら挙げる。**
+/// 平常の形として扱うクエリ種別。ここに無い種別が出たら挙げる。
 ///
 /// 実測(この環境の1日)では A / AAAA / HTTPS / PTR / SVCB でほぼ全部を占め、
-/// **TXT は46,939件中1件、ANY と NULL は0件**だった。DNSトンネリングは TXT や NULL を
+/// TXT は46,939件中1件、ANY と NULL は0件だった。DNSトンネリングは TXT や NULL を
 /// 大量に使うので、平常がここまできれいだと、始まった日に一目で分かる。
 const COMMON_QTYPES: &[&str] = &[
     "A", "AAAA", "HTTPS", "PTR", "SVCB", "SOA", "SRV", "NS", "MX", "NAPTR", "DS", "DNSKEY",
@@ -63,16 +63,16 @@ const COMMON_QTYPES: &[&str] = &[
 
 // ---- 周期(ビーコン)の検出 ----
 //
-// **C2やテレメトリは機械が鳴らすので間隔が揃う。** 人の操作で引かれる名前は間隔がばらつく。
+// C2やテレメトリは機械が鳴らすので間隔が揃う。 人の操作で引かれる名前は間隔がばらつく。
 // 揃い方は変動係数(標準偏差÷中央値)で測る —— 0に近いほど機械的。
-// **端末ごとに分けて数える**(同じドメインを複数台が引くと間隔が混ざって周期が消える)。
+// 端末ごとに分けて数える(同じドメインを複数台が引くと間隔が混ざって周期が消える)。
 
 /// 周期とみなす変動係数の上限。実測では 0.25 以下に絞ると読める数(数件)に落ち着き、
 /// 0.5 を超えるあたりからは人の操作の揺らぎと区別が付かなくなる。
 const BEACON_MAX_CV: f64 = 0.25;
 /// 周期と言うのに必要な間隔の数(観測はこれ+1回)。少ないと偶然そろっただけのものが混じる。
 const BEACON_MIN_INTERVALS: usize = 6;
-/// これより短い間隔は周期として扱わない。**ブロックされた名前の再試行が秒間隔で並ぶ**ので、
+/// これより短い間隔は周期として扱わない。ブロックされた名前の再試行が秒間隔で並ぶので、
 /// それを「規則正しい通信」と呼ばないための下限。
 const BEACON_MIN_MEDIAN_SECS: f64 = 20.0;
 /// 同時に飛ぶ問い合わせ(A/AAAA/HTTPS)を1回に畳む幅。畳まないと間隔0が大量に混じる。
@@ -80,13 +80,13 @@ const BEACON_SAME_SHOT_SECS: f64 = 1.0;
 
 // ---- ラベルの形(DNSトンネリング・DGA) ----
 //
-// **長くて出鱈目な名前だけでは決め手にならない。** 実測すると、CDNとクラウドが
+// 長くて出鱈目な名前だけでは決め手にならない。 実測すると、CDNとクラウドが
 // 同じ形の名前を大量に使っていた(`azr.footprintdns.com` に17個、`elb.amazonaws.com` に16個…)。
 // 105個の親が引っかかり、そのどれもが正常な通信だった。
 //
-// **分かれ目は「同じ名前を繰り返し引くか」。** CDNは同じホスト名を何度も引く(Alexaの
+// 分かれ目は「同じ名前を繰り返し引くか」。 CDNは同じホスト名を何度も引く(Alexaの
 // `devices.a2z.com` は実測で 怪しい子2個 ÷ 総クエリ207回 = 0.01)。一方トンネリングは
-// **1回の通信ごとに新しい名前を作る**ので、この比が1に近づく。
+// 1回の通信ごとに新しい名前を作るので、この比が1に近づく。
 
 /// 「長い」とみなすラベルの文字数。
 const LABEL_LONG: usize = 25;
@@ -94,22 +94,22 @@ const LABEL_LONG: usize = 25;
 const LABEL_ENTROPY: f64 = 3.5;
 /// 1つの親の下にこれだけの数が揃ってはじめて疑う。
 const LABEL_MIN_DISTINCT: usize = 10;
-/// ユニークな名前 ÷ 問い合わせ回数。**これが決め手**(1に近い = 毎回ちがう名前)。
+/// ユニークな名前 ÷ 問い合わせ回数。これが決め手(1に近い = 毎回ちがう名前)。
 const LABEL_MIN_UNIQUE_RATIO: f64 = 0.7;
 /// 親としてまとめる深さ(後ろから何ラベルか)。`a.b.example.com` を `b.example.com` にまとめる。
 const LABEL_PARENT_DEPTH: usize = 3;
 
-/// 候補から外す末尾。**通信そのものではないものを落とす。**
+/// 候補から外す末尾。通信そのものではないものを落とす。
 ///
 /// 逆引き(`*.in-addr.arpa` / `*.ip6.arpa`)は、Pi-hole 自身がローカル端末の名前を
-/// 引くために出しているもので、ローカルの名前解決を持っていない環境では**必ず NXDOMAIN
-/// になる**。落とさないと「存在しない名前として何回返っている」の一覧が、
+/// 引くために出しているもので、ローカルの名前解決を持っていない環境では必ず NXDOMAIN
+/// になる。落とさないと「存在しない名前として何回返っている」の一覧が、
 /// 家の中の端末の逆引きだけで埋まる(実際にそうなった)。
 const EXCLUDED_SUFFIXES: &[&str] = &[".in-addr.arpa", ".ip6.arpa", ".arpa"];
 
-/// 候補が挙がった理由。**1つのドメインに複数付く**(初出かつNXDOMAIN多発、など)。
+/// 候補が挙がった理由。1つのドメインに複数付く(初出かつNXDOMAIN多発、など)。
 ///
-/// **理由は必ず画面に出す。** 「なぜこれが並んでいるのか」が分からない一覧は、
+/// 理由は必ず画面に出す。 「なぜこれが並んでいるのか」が分からない一覧は、
 /// 誤検知なのか本物なのかを人が判断できず、結局全部無視されることになる。
 #[derive(Debug, Clone, Serialize)]
 pub struct Reason {
@@ -118,15 +118,15 @@ pub struct Reason {
     /// 人が読む説明
     pub detail: String,
     /// この理由の元になった通信を Pi-hole 側で絞り込むための条件。
-    /// **画面はこれをそのままクエリログのリンクにする**(下記 [`QueryFilter`])。
+    /// 画面はこれをそのままクエリログのリンクにする(下記 [`QueryFilter`])。
     pub filter: QueryFilter,
 }
 
 /// Pi-hole のクエリログを絞り込む条件。
 ///
-/// **フィールド名は Pi-hole の GET パラメータ名そのまま**(`domain` / `client_ip` /
+/// フィールド名は Pi-hole の GET パラメータ名そのまま(`domain` / `client_ip` /
 /// `type` / `reply`)。画面はキーと値を URL エンコードして並べるだけでよく、
-/// **「どう絞り込むか」の知識はこちら側に閉じる** —— 手ごとに違う条件
+/// 「どう絞り込むか」の知識はこちら側に閉じる —— 手ごとに違う条件
 /// (種別なら `type`、NXDOMAIN なら `reply`)を画面に散らかさないため。
 ///
 /// ドメインは `*` を使える(`/api/queries` の仕様。親でまとめた
@@ -167,7 +167,7 @@ impl QueryFilter {
     }
 }
 
-/// 候補の選び方1つぶんの説明。**画面に出す文をコードから作る** ——
+/// 候補の選び方1つぶんの説明。画面に出す文をコードから作る ——
 /// しきい値を散文で別に書くと、定数をいじったときに説明だけが古くなる
 /// (「なぜ挙がったか」が読めない一覧は結局無視される、と同じ理由で、
 /// 「どう選んでいるか」が古い一覧も信用されない)。
@@ -180,7 +180,7 @@ pub struct Method {
     pub catches: &'static str,
     /// どう判定しているか(しきい値つき)
     pub how: String,
-    /// 見える範囲・誤検知の出方。**「静かなのか、材料が無いのか」を読み分けさせる**
+    /// 見える範囲・誤検知の出方。「静かなのか、材料が無いのか」を読み分けさせる
     pub caveat: String,
 }
 
@@ -258,15 +258,13 @@ fn methods(backfill_days: i64) -> Vec<Method> {
 
 /// 怪しい通信の候補1件。
 ///
-/// **`domain` / `count` / `reviewed` / `note` はブロック済み一覧と同じ形にしてある** ——
+/// `domain` / `count` / `reviewed` / `note` はブロック済み一覧と同じ形にしてある ——
 /// 画面の行・詳細モーダル・「AIに聞く」・メモがそのまま使い回せる。
 #[derive(Debug, Clone, Serialize)]
 pub struct WatchItem {
     pub domain: String,
     pub count: i64,
     pub reviewed: bool,
-    /// `""` = 未確認 / `"issue"` = 問題あり(ブロックされて当然) / `"ok"` = 問題なし(無害だった)
-    pub verdict: String,
     pub note: String,
     /// 「詳しく調べる」の結果（詳細画面でメモの上に出す）
     pub research: String,
@@ -278,11 +276,11 @@ pub struct WatchItem {
     pub first_seen: i64,
 }
 
-/// 画面に渡す一式。**数字だけでなく「どこまで見えているか」も返す** ——
+/// 画面に渡す一式。数字だけでなく「どこまで見えているか」も返す ——
 /// 貯まっていない時期に「初出0件」と出ると、平穏なのか単に材料が無いのか区別できない。
 #[derive(Debug, Clone, Serialize)]
 pub struct WatchResult {
-    /// 遡り取り込みが済んでいるか。**偽なら初出の判定は当てにならない**
+    /// 遡り取り込みが済んでいるか。偽なら初出の判定は当てにならない
     /// (過去を知らないので、すべてが初出に見える)
     pub ready: bool,
     pub backfill_days: i64,
@@ -291,11 +289,11 @@ pub struct WatchResult {
     pub baseline: Option<i64>,
     /// 実際に見はじめる時刻(unix秒)。基準日時が古すぎるときは丸めた後の値
     pub since: i64,
-    /// 見ている範囲の終わり(unix秒 = いま)。**画面が持つ時刻を使わない** ——
+    /// 見ている範囲の終わり(unix秒 = いま)。画面が持つ時刻を使わない ——
     /// 理由のリンクに載せる範囲は、判定に使った範囲とそろっている必要がある
     pub until: i64,
     /// 基準日時が遡り取り込みの範囲より古くて丸めたか。
-    /// **丸めたことは画面に出す** —— 黙って狭めると「設定した日から見ているつもり」で
+    /// 丸めたことは画面に出す —— 黙って狭めると「設定した日から見ているつもり」で
     /// 実際は違う、という食い違いが起きる
     pub baseline_clamped: bool,
     /// 生のクエリが実際に何時間ぶん貯まっているか(NXDOMAIN・種別はこの範囲しか見ていない)
@@ -305,7 +303,7 @@ pub struct WatchResult {
     pub qtypes: Vec<(String, i64)>,
     /// 候補の選び方(しきい値つき)。画面の「どうやって候補を選んでいるか」に出す
     pub methods: Vec<Method>,
-    /// Pi-hole の管理画面の URL。**理由の札のリンクを組むのに使う**
+    /// Pi-hole の管理画面の URL。理由の札のリンクを組むのに使う
     /// (空なら画面はリンクにしない)
     pub pihole_url: String,
     pub items: Vec<WatchItem>,
@@ -316,7 +314,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
     let backfill_days = db.backfilled_days().await?;
     let stats = db.ingest_stats().await?;
 
-    // **基準日時があればそこから、無ければ既定の窓から見る。**
+    // 基準日時があればそこから、無ければ既定の窓から見る。
     // 遡り取り込みの範囲より前には戻れない(初出の判定に使う `first_seen` を
     // そこまでしか知らないので、それ以前は「はじめて見た」が嘘になる)
     let baseline = db.setting(BASELINE_KEY).await?.and_then(|v| v.parse::<i64>().ok());
@@ -328,7 +326,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
     };
     let since_secs = since_ts as i64;
 
-    // 理由をドメインごとに束ねる。**同じドメインを手ごとに何度も並べない** ——
+    // 理由をドメインごとに束ねる。同じドメインを手ごとに何度も並べない ——
     // 一覧が重複で埋まると、件数が実際より多く見える
     let mut reasons: HashMap<String, Vec<Reason>> = HashMap::new();
     let mut first_seen: HashMap<String, i64> = HashMap::new();
@@ -390,7 +388,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
 
     // ⑤ ラベルの形(トンネリング・DGA)
     for t in tunneling(db.domain_query_counts_since(since_ts).await?) {
-        // **親そのものは引かれていない**ので、子をまとめて見せる(`*` はPi-holeが解釈する)
+        // 親そのものは引かれていないので、子をまとめて見せる(`*` はPi-holeが解釈する)
         let filter = QueryFilter::domain(&format!("*.{}", t.parent));
         reasons.entry(t.parent).or_default().push(Reason {
             kind: "label_shape",
@@ -417,7 +415,6 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
                 first_seen: first_seen.get(&domain).copied().unwrap_or(0),
                 count,
                 reviewed: record.map(|r| r.reviewed).unwrap_or(false),
-                verdict: record.map(|r| r.verdict.clone()).unwrap_or_default(),
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
@@ -428,7 +425,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
         })
         .collect();
 
-    // **理由の多いものを上に。** 1つの手に引っかかっただけのものより、
+    // 理由の多いものを上に。 1つの手に引っかかっただけのものより、
     // 複数の手に同時に引っかかったもののほうが見る価値がある。
     // 同数なら件数の多い順、それも同じならドメイン名で安定させる
     items.sort_by(|a, b| {
@@ -465,7 +462,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
 /// 見つかった周期。
 struct Beacon {
     domain: String,
-    /// **どの端末が鳴らしているか。** 一覧に出す「この窓で引いた端末」は複数並ぶことが
+    /// どの端末が鳴らしているか。 一覧に出す「この窓で引いた端末」は複数並ぶことが
     /// あるので、周期を持っているのがどれかは理由の側に書く
     client: String,
     median_secs: f64,
@@ -474,7 +471,7 @@ struct Beacon {
 
 /// 端末ごとに間隔の揃い方を測り、機械的に鳴っているものを返す。
 ///
-/// 入力は (ドメイン, 端末, 時刻) を**その順に並べたもの**(`db.timeline_since`)。
+/// 入力は (ドメイン, 端末, 時刻) をその順に並べたもの(`db.timeline_since`)。
 /// 隣り合う同じ組を畳んで進むので、全部をメモリに持ち直さずに済む。
 fn beacons(timeline: Vec<(String, String, f64)>) -> Vec<Beacon> {
     let mut out: Vec<Beacon> = Vec::new();
@@ -569,7 +566,7 @@ fn tunneling(counts: Vec<(String, i64)>) -> Vec<Tunneling> {
     by_parent
         .into_iter()
         .filter(|(_, (distinct, queries))| {
-            // **ここが CDN との分かれ目。** 同じ名前を繰り返し引いていれば比は小さくなる
+            // ここが CDN との分かれ目。 同じ名前を繰り返し引いていれば比は小さくなる
             *distinct >= LABEL_MIN_DISTINCT
                 && *queries > 0
                 && (*distinct as f64 / *queries as f64) >= LABEL_MIN_UNIQUE_RATIO
@@ -599,7 +596,7 @@ fn entropy(s: &str) -> f64 {
 
 /// 間隔を「10分」「1.5時間」のように読ませる。
 ///
-/// **1時間ちょうどを「60分」と出さない。** 周期は 60秒 / 5分 / 30分 / 1時間 のような
+/// 1時間ちょうどを「60分」と出さない。 周期は 60秒 / 5分 / 30分 / 1時間 のような
 /// きりのよい値になることが多く、そこが読み取りやすい単位で出てほしい。
 fn interval_text(secs: f64) -> String {
     if secs < 90.0 {
@@ -648,7 +645,7 @@ mod tests {
         assert_eq!(ago(600.0), "10分前");
         assert_eq!(ago(3.0 * 3600.0), "3時間前");
         assert_eq!(ago(50.0 * 3600.0), "2日前");
-        // **負の経過を「-1分前」と出さない**(時刻のずれで未来になることがある)
+        // 負の経過を「-1分前」と出さない(時刻のずれで未来になることがある)
         assert_eq!(ago(-5.0), "たった今");
     }
 
@@ -659,7 +656,7 @@ mod tests {
         // 「NXDOMAIN多発」が家の中の逆引きで埋まる
         assert!(is_excluded("235.1.168.192.in-addr.arpa"));
         assert!(is_excluded("1.0.0.0.0.0.0.0.ip6.arpa"));
-        // **普通のドメインは落とさない**(部分一致で巻き込まないこと)
+        // 普通のドメインは落とさない(部分一致で巻き込まないこと)
         assert!(!is_excluded("example.com"));
         assert!(!is_excluded("arpa-labs.example.com"));
     }
@@ -698,7 +695,7 @@ mod tests {
 
     #[test]
     fn beacons_split_by_client() {
-        // **同じドメインでも端末ごとに数える。** 混ぜると間隔が乱れて周期が消える。
+        // 同じドメインでも端末ごとに数える。 混ぜると間隔が乱れて周期が消える。
         // 2台が30秒ずれて60秒おきに鳴らすと、混ぜた列は 30/30/30… に見えてしまう
         let mut timeline = Vec::new();
         for i in 0..10 {
@@ -717,9 +714,9 @@ mod tests {
 
     #[test]
     fn tunneling_ignores_cdn_hostnames() {
-        // **CDNは同じ名前を何度も引く。** 実測でも Alexa は 怪しい子2個 ÷ 総クエリ207回 = 0.01
+        // CDNは同じ名前を何度も引く。 実測でも Alexa は 怪しい子2個 ÷ 総クエリ207回 = 0.01
         // だった。ここを分けられないと、CDNとクラウドで一覧が埋まる(実測105件)
-        // **ゼロ埋めの数値では駄目**（'0' ばかりでエントロピーが低く、
+        // ゼロ埋めの数値では駄目（'0' ばかりでエントロピーが低く、
         // そもそも「出鱈目な名前」の条件を満たさない）ので、散らばった文字列を作る
         let label = |i: usize| -> String {
             let mut state = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -768,7 +765,7 @@ mod tests {
 
     #[test]
     fn reason_filter_uses_pihole_parameter_names() {
-        // **キー名は Pi-hole の GET パラメータそのもの。** 画面はこれをそのまま
+        // キー名は Pi-hole の GET パラメータそのもの。 画面はこれをそのまま
         // `/admin/queries.lp?...` に並べるので、名前を変えるとリンクが黙って効かなくなる
         // (押しても絞り込まれていないクエリログが開く)
         let full = QueryFilter::domain("example.com")
@@ -784,7 +781,7 @@ mod tests {
         ] {
             assert!(json.contains(expected), "{expected} が入っていない: {json}");
         }
-        // **持っていない条件は出さない。** 空の値を並べると、絞り込みが効かないどころか
+        // 持っていない条件は出さない。 空の値を並べると、絞り込みが効かないどころか
         // 「そのドメインで種別が空のクエリ」を探しに行く
         assert_eq!(
             serde_json::to_string(&QueryFilter::domain("a.example.com")).unwrap(),
@@ -801,7 +798,7 @@ mod tests {
         for kind in ["first_seen", "nxdomain", "rare_qtype", "beacon", "label_shape"] {
             assert!(kinds.contains(&kind), "{kind} の説明が無い");
         }
-        // **しきい値は定数から組み立てる**(散文で書き写すと、変えたときに説明だけ古くなる)
+        // しきい値は定数から組み立てる(散文で書き写すと、変えたときに説明だけ古くなる)
         let how = |kind: &str| {
             methods
                 .iter()
@@ -822,7 +819,7 @@ mod tests {
         for t in ["A", "AAAA", "HTTPS", "PTR", "SVCB"] {
             assert!(COMMON_QTYPES.contains(&t), "{t} が平常の種別から漏れている");
         }
-        // トンネリングに使われる種別は**平常に入れない**(入れると検出できなくなる)
+        // トンネリングに使われる種別は平常に入れない(入れると検出できなくなる)
         for t in ["TXT", "NULL", "ANY"] {
             assert!(!COMMON_QTYPES.contains(&t), "{t} を平常に入れてはいけない");
         }

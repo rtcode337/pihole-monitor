@@ -14,31 +14,21 @@ use rusqlite::{Connection, OptionalExtension};
 
 /// ドメイン1件についてこちらが持っている記録。
 ///
-/// **メモと確認済みは独立している。** 行があること = 確認済み だった頃は、
+/// メモと確認済みは独立している。 行があること = 確認済み だった頃は、
 /// メモを残すために確認済みにするしかなかった —— 「まだ判断していないが調べた内容は
 /// 残したい」(まとめてAIに聞いた結果がまさにそれ)が表せなかった。
 #[derive(Debug, Clone, Default)]
 pub struct DomainRecord {
     pub note: String,
-    /// 何らかの判定を下したか(`verdict` が空でない)。**判定の中身とは別に持つ** ——
-    /// 「見た」と「どちらだったか」は違う問いで、一覧の絞り込みは前者を使う場面がある。
+    /// 調べて納得したか。状態はこれ1つ(かつては「問題あり / 問題なし」に分けていたが、
+    /// 見返すときに要るのは「もう見たか」だけだった)。
     pub reviewed: bool,
-    /// 判定。**そのドメイン自身が問題のある通信かどうか**を記録する。
-    ///
-    /// - `""` = 未確認
-    /// - `"issue"` = 問題あり（広告・トラッカー・不要なテレメトリ等。**ブロックされて当然**）
-    /// - `"ok"` = 問題なし（**怪しい候補として挙がったが、調べたら無害だった**）
-    ///
-    /// **「確認した」を1つの状態にしない。** 一覧に並ぶものは「ブロックが妥当だったもの」と
-    /// 「怪しく見えただけのもの」が混ざっていて、そこを見分けられないと、
-    /// あとから見返したときに**何が誤検知だったのかが分からなくなる**。
-    pub verdict: String,
-    /// 「詳しく調べる」の結果。**メモとは別に持つ** ——
+    /// 「詳しく調べる」の結果。メモとは別に持つ ——
     /// メモは人が書く（あるいは「まとめてAIに聞く」が書く）ものなので、
     /// 調査結果で黙って上書きすると、書いた判断が消える。
-    /// 画面では詳細のメモの**上**に出す。
+    /// 画面では詳細のメモの上に出す。
     pub research: String,
-    /// 調べた日時（ISO8601）。**いつの調査かが分からないと鵜呑みにできない**。
+    /// 調べた日時（ISO8601）。いつの調査かが分からないと鵜呑みにできない。
     pub researched_at: String,
 }
 
@@ -49,7 +39,7 @@ pub struct DomainProfile {
     pub last_seen: Option<i64>,
     /// 記録し始めてからの総問い合わせ回数(遡り取り込みぶんを含む)
     pub total: i64,
-    /// 以下はいずれも**保持期間の窓の中**(生のクエリが残っている範囲)
+    /// 以下はいずれも保持期間の窓の中(生のクエリが残っている範囲)
     pub clients: Vec<(String, i64)>,
     pub statuses: Vec<(String, i64)>,
     pub replies: Vec<(String, i64)>,
@@ -58,7 +48,7 @@ pub struct DomainProfile {
 
 /// 取り込みの状況(件数と、生のクエリの一番古い時刻)。
 ///
-/// **いまは遡り取り込みの完了ログにしか出していない。** 画面に「どれだけ貯まっているか」を
+/// いまは遡り取り込みの完了ログにしか出していない。 画面に「どれだけ貯まっているか」を
 /// 出すのは次の段(初出ドメインの一覧)の仕事なので、そこで使う。
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
@@ -75,7 +65,7 @@ pub struct Db {
 
 /// unix秒 → 日本時間の日付(YYYY-MM-DD)。
 ///
-/// **日付の境界は日本時間で数える。** UTC のまま日付に直すと、日本の朝9時までが
+/// 日付の境界は日本時間で数える。 UTC のまま日付に直すと、日本の朝9時までが
 /// 前日に入り、「今日の件数」が実際とずれる。JST は夏時間を持たないので固定の +9h でよい。
 fn jst_day(ts: f64) -> String {
     const JST_OFFSET_SECS: i64 = 9 * 3600;
@@ -106,14 +96,13 @@ impl Db {
                  updated_at    TEXT NOT NULL,
                  note          TEXT,
                  reviewed      INTEGER NOT NULL DEFAULT 0,
-                 verdict       TEXT NOT NULL DEFAULT '',
                  research      TEXT,
                  researched_at TEXT
              )",
         )
         .context("domain_notesテーブルを作成できない")?;
 
-        // 画面から決める設定(いまは「どの AI に聞くか」だけ)。**環境変数ではなく DB に持つ**
+        // 画面から決める設定(いまは「どの AI に聞くか」だけ)。環境変数ではなく DB に持つ
         // —— 実行のたびに読むので、コンテナを作り直さなくても切り替えが効く
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -126,11 +115,11 @@ impl Db {
 
         // ---- 「ブロックされていない通信」を見るための蓄積(第2の柱) ----
         //
-        // **ブロック済みの一覧(domain_notes)と役割が違う。** あちらは Pi-hole を叩いた
+        // ブロック済みの一覧(domain_notes)と役割が違う。 あちらは Pi-hole を叩いた
         // その場の集計だが、こちらは「いつもと違うか」を言うための時系列で、
         // 比較対象が無いと何も判定できない。だから貯める。
         conn.execute_batch(
-            // 生のクエリ。**保持期間つきの窓**(DNS_RETENTION_DAYS)。周期の検出に
+            // 生のクエリ。保持期間つきの窓(DNS_RETENTION_DAYS)。周期の検出に
             // 1件ごとの時刻が要るので、集計ではなく生で持つ。
             // 主キーは Pi-hole の id ——取りこぼさないよう窓を重ねて取るので、
             // 重複を弾く手立てが要る
@@ -148,7 +137,7 @@ impl Db {
              CREATE INDEX IF NOT EXISTS dns_queries_ts ON dns_queries(ts);
              CREATE INDEX IF NOT EXISTS dns_queries_domain ON dns_queries(domain, ts);
 
-             -- ドメインの一生。**保持期間を過ぎても消さない** ——
+             -- ドメインの一生。保持期間を過ぎても消さない ——
              -- 初出(はじめて見た日)の判定はこの列だけが根拠で、
              -- 生のクエリと一緒に消すと『毎日すべてが初出』になる
              CREATE TABLE IF NOT EXISTS dns_domains (
@@ -161,7 +150,7 @@ impl Db {
              );
              CREATE INDEX IF NOT EXISTS dns_domains_first ON dns_domains(first_seen);
 
-             -- クライアントごとの日次の件数。**生のクエリが消えても残す** ——
+             -- クライアントごとの日次の件数。生のクエリが消えても残す ——
              -- 「この端末が急に見えなくなった(VPN・DoHに切り替わった)」を言うには
              -- 保持期間より長い並びが要る
              CREATE TABLE IF NOT EXISTS dns_client_daily (
@@ -182,21 +171,19 @@ impl Db {
     pub async fn records(&self) -> Result<HashMap<String, DomainRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT domain, note, reviewed, verdict, research, researched_at FROM domain_notes",
+                "SELECT domain, note, reviewed, research, researched_at FROM domain_notes",
             )?;
             let rows = stmt.query_map([], |row| {
                 let domain: String = row.get(0)?;
                 let note: Option<String> = row.get(1)?;
                 let reviewed: i64 = row.get(2)?;
-                let verdict: Option<String> = row.get(3)?;
-                let research: Option<String> = row.get(4)?;
-                let researched_at: Option<String> = row.get(5)?;
+                let research: Option<String> = row.get(3)?;
+                let researched_at: Option<String> = row.get(4)?;
                 Ok((
                     domain,
                     DomainRecord {
                         note: note.unwrap_or_default(),
                         reviewed: reviewed != 0,
-                        verdict: verdict.unwrap_or_default(),
                         research: research.unwrap_or_default(),
                         researched_at: researched_at.unwrap_or_default(),
                     },
@@ -209,29 +196,22 @@ impl Db {
 
     /// 確認済み / 未確認をまとめて切り替える(1件でも同じ経路)。
     ///
-    /// **`note` は渡したときだけ書く。** チェックした複数件を確認済みにするときに、
+    /// `note` は渡したときだけ書く。 チェックした複数件を確認済みにするときに、
     /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
-    /// **未確認に戻してもメモは消さない** —— メモと確認済みは別の話なので、
+    /// 未確認に戻してもメモは消さない —— メモと確認済みは別の話なので、
     /// 戻したときに調べた内容まで失われては困る(メモが空の行だけ消える)。
     ///
-    /// **1つのトランザクションで書く** —— 途中で落ちたときに半分だけ残さないため。
+    /// 1つのトランザクションで書く —— 途中で落ちたときに半分だけ残さないため。
     pub async fn set_reviewed(
         &self,
         domains: Vec<String>,
         reviewed: bool,
-        verdict: Option<String>,
         note: Option<String>,
     ) -> Result<()> {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
-            // 未確認に戻すときは判定も落とす(「確認していないのに問題なし」を残さない)
-            let verdict = if reviewed {
-                verdict
-            } else {
-                Some(String::new())
-            };
             for domain in &domains {
-                upsert(&tx, domain, note.as_deref(), Some(reviewed), verdict.as_deref())?;
+                upsert(&tx, domain, note.as_deref(), Some(reviewed))?;
                 if !reviewed {
                     cleanup(&tx, domain)?;
                 }
@@ -245,17 +225,17 @@ impl Db {
     /// メモだけ保存する(確認済みかどうかは変えない)。
     pub async fn save_note(&self, domain: String, note: String) -> Result<()> {
         self.with_conn(move |conn| {
-            upsert(conn, &domain, Some(&note), None, None)?;
+            upsert(conn, &domain, Some(&note), None)?;
             cleanup(conn, &domain)?;
             Ok(())
         })
         .await
     }
 
-    /// **メモが空のときだけ**書く。書いたらその中身を、既にあれば `None` を返す。
+    /// メモが空のときだけ書く。書いたらその中身を、既にあれば `None` を返す。
     ///
     /// 「詳しく調べる」で使う —— 調べた以上は一覧にも一言残っていてほしいが、
-    /// **人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない**。
+    /// 人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない。
     /// 読みと書きは1つの接続の中で済ませる（間に他の書き込みを挟ませない）。
     pub async fn save_note_if_empty(&self, domain: String, note: String) -> Result<Option<String>> {
         self.with_conn(move |conn| {
@@ -269,19 +249,19 @@ impl Db {
             if current.is_some_and(|note| !note.trim().is_empty()) {
                 return Ok(None);
             }
-            upsert(conn, &domain, Some(&note), None, None)?;
+            upsert(conn, &domain, Some(&note), None)?;
             Ok(Some(note))
         })
         .await
     }
 
     /// メモをまとめて保存する(まとめてAIに聞いた結果の書き戻し)。
-    /// **1つのトランザクションで書く** —— 途中で落ちたときに半分だけ残さないため。
+    /// 1つのトランザクションで書く —— 途中で落ちたときに半分だけ残さないため。
     pub async fn save_notes(&self, notes: Vec<(String, String)>) -> Result<()> {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
             for (domain, note) in &notes {
-                upsert(&tx, domain, Some(note), None, None)?;
+                upsert(&tx, domain, Some(note), None)?;
                 cleanup(&tx, domain)?;
             }
             tx.commit()?;
@@ -290,17 +270,17 @@ impl Db {
         .await
     }
 
-    /// 「詳しく調べる」の結果を保存する。**メモには触らない**
+    /// 「詳しく調べる」の結果を保存する。メモには触らない
     /// （人が書いた判断を調査結果で上書きしないため）。
     ///
-    /// **入れ替える**（追記ではない）。もう一度「詳しく調べる」を押すのは
+    /// 入れ替える（追記ではない）。もう一度「詳しく調べる」を押すのは
     /// 調べ直しなので、前の結果と追加の質問はそこで流れる。
     pub async fn save_research(&self, domain: String, research: String) -> Result<()> {
         self.with_conn(move |conn| write_research(conn, &domain, &research))
             .await
     }
 
-    /// いまの調査結果（無ければ空文字）。**追加の質問を投げる前の材料**になる。
+    /// いまの調査結果（無ければ空文字）。追加の質問を投げる前の材料になる。
     pub async fn research(&self, domain: String) -> Result<String> {
         self.with_conn(move |conn| {
             let value: Option<String> = conn
@@ -315,10 +295,10 @@ impl Db {
         .await
     }
 
-    /// 追加の質問と答えを調査結果の**末尾に足す**。返すのは足した後の全文。
+    /// 追加の質問と答えを調査結果の末尾に足す。返すのは足した後の全文。
     ///
-    /// **読みと書きを1つの接続の中で済ませる**（間に他の書き込みを挟ませない）。
-    /// **入れ替えないのは、深掘りが前の答えを踏まえた続きだから** ——
+    /// 読みと書きを1つの接続の中で済ませる（間に他の書き込みを挟ませない）。
+    /// 入れ替えないのは、深掘りが前の答えを踏まえた続きだから ——
     /// 上書きすると、次の質問に渡す材料（それまでのやり取り）が消える。
     pub async fn append_research(&self, domain: String, addition: String) -> Result<String> {
         self.with_conn(move |conn| {
@@ -397,8 +377,8 @@ impl Db {
             .await
     }
 
-    /// いま持っている一番大きい id。**Pi-hole 側の id がこれより小さくなったら、
-    /// 向こうの DB が作り直されている**(id が振り直される)ので、こちらも捨てて取り直す。
+    /// いま持っている一番大きい id。Pi-hole 側の id がこれより小さくなったら、
+    /// 向こうの DB が作り直されている(id が振り直される)ので、こちらも捨てて取り直す。
     pub async fn max_query_id(&self) -> Result<i64> {
         self.with_conn(|conn| {
             Ok(conn.query_row("SELECT COALESCE(MAX(id), 0) FROM dns_queries", [], |r| {
@@ -411,7 +391,7 @@ impl Db {
     /// 取り込んだクエリを保存し、ドメインとクライアントの集計も同じトランザクションで更新する。
     /// 戻り値は実際に増えた件数(重複は `id` で弾かれる)。
     ///
-    /// **1つのトランザクションで書く。** 途中で落ちて「生のクエリだけ入って集計が古い」
+    /// 1つのトランザクションで書く。 途中で落ちて「生のクエリだけ入って集計が古い」
     /// 状態を残さないため。
     pub async fn insert_queries(&self, records: Vec<crate::pihole::QueryRecord>) -> Result<usize> {
         self.with_conn(move |conn| {
@@ -443,7 +423,7 @@ impl Db {
                         r.id, r.ts, r.domain, r.client, r.qtype, r.status,
                         r.reply, r.upstream, r.cname
                     ])?;
-                    // **重複した行では集計を進めない。** 窓を重ねて取るので、
+                    // 重複した行では集計を進めない。 窓を重ねて取るので、
                     // ここで数えると同じクエリを何度も足してしまう
                     if n == 0 {
                         continue;
@@ -461,7 +441,7 @@ impl Db {
     }
 
     /// 遡り取り込み: その日に出たドメインを `dns_domains` に反映する。
-    /// **生のクエリは入れない**(集計しか取っていないので時刻が無い)。
+    /// 生のクエリは入れない(集計しか取っていないので時刻が無い)。
     pub async fn merge_domain_counts(
         &self,
         counts: Vec<crate::pihole::DomainCount>,
@@ -488,7 +468,7 @@ impl Db {
         .await
     }
 
-    /// 保持期間を過ぎた生のクエリを消す。**`dns_domains` と `dns_client_daily` は消さない**
+    /// 保持期間を過ぎた生のクエリを消す。`dns_domains` と `dns_client_daily` は消さない
     /// —— 初出とカバレッジの判定はそちらが根拠なので、一緒に消すと積み上げた意味が無くなる。
     pub async fn prune_queries(&self, before_ts: f64) -> Result<usize> {
         self.with_conn(move |conn| {
@@ -509,7 +489,7 @@ impl Db {
 
     // ---- 「怪しい通信」の候補を数える(watch.rs から呼ぶ) ----
 
-    /// `since` 以降にはじめて見たドメイン(初出)。**新しい順**。
+    /// `since` 以降にはじめて見たドメイン(初出)。新しい順。
     ///
     /// 判定の根拠は `dns_domains.first_seen` だけで、生のクエリの保持期間には依らない
     /// (遡り取り込みが埋めた日付がそのまま効く)。
@@ -541,7 +521,7 @@ impl Db {
         .await
     }
 
-    /// `since` 以降に出たクエリ種別ごとの件数(全体)。**平常の形を知るために使う** ——
+    /// `since` 以降に出たクエリ種別ごとの件数(全体)。平常の形を知るために使う ——
     /// 何が珍しいかは、その環境で実際に出ている割合からしか決められない。
     pub async fn qtype_counts_since(&self, since: f64) -> Result<Vec<(String, i64)>> {
         self.with_conn(move |conn| {
@@ -587,7 +567,7 @@ impl Db {
 
     /// `since` 以降の (ドメイン, 端末, 時刻) を、その3つの順に並べて返す。
     ///
-    /// **周期の判定は端末ごとに分ける。** 同じドメインを複数台が引くと間隔が混ざり、
+    /// 周期の判定は端末ごとに分ける。 同じドメインを複数台が引くと間隔が混ざり、
     /// 機械的に等間隔でも周期が消えてしまう。
     /// 並べ替えておくことで、呼び出し側は同じ組を隣り合わせで畳める(全部をメモリに
     /// 持たずに済む)。
@@ -604,7 +584,7 @@ impl Db {
     }
 
     /// `since` 以降の、ドメインごとの問い合わせ回数。
-    /// **ラベルの形の判定で「同じ名前を何回引いたか」を見るために使う**
+    /// ラベルの形の判定で「同じ名前を何回引いたか」を見るために使う
     /// (CDNは同じホスト名を何度も引き、トンネリングは毎回ちがう名前を引く)。
     pub async fn domain_query_counts_since(&self, since: f64) -> Result<Vec<(String, i64)>> {
         self.with_conn(move |conn| {
@@ -618,7 +598,7 @@ impl Db {
     }
 
     /// ドメインごとの、`since` 以降の件数と引いたクライアント。
-    /// **どの端末が引いたかは判断材料そのもの**(PCが引くのと家電が引くのでは意味が違う)。
+    /// どの端末が引いたかは判断材料そのもの(PCが引くのと家電が引くのでは意味が違う)。
     pub async fn domain_activity_since(
         &self,
         since: f64,
@@ -663,8 +643,8 @@ impl Db {
 
     /// 1つのドメインについて、こちらが観測した事実をまとめて返す。
     ///
-    /// **「詳しく調べる」でAIに渡す材料。** そのドメインが何かは web でも分かるが、
-    /// **このネットワークでどう振る舞っているか**はこちらしか知らない。
+    /// 「詳しく調べる」でAIに渡す材料。 そのドメインが何かは web でも分かるが、
+    /// このネットワークでどう振る舞っているかはこちらしか知らない。
     /// 両方を突き合わせて初めて「放っておいてよいか」が言える。
     pub async fn domain_profile(&self, domain: String, since: f64) -> Result<DomainProfile> {
         self.with_conn(move |conn| {
@@ -743,7 +723,7 @@ impl Db {
     }
 }
 
-/// 調査結果を書く（入れ替え）。**保存と追記で同じ1文を使う** ——
+/// 調査結果を書く（入れ替え）。保存と追記で同じ1文を使う ——
 /// 列の並びや時刻の付け方が2か所に分かれると、片方だけ直す事故が起きる。
 fn write_research(conn: &Connection, domain: &str, research: &str) -> Result<()> {
     let now = chrono::Local::now().to_rfc3339();
@@ -758,25 +738,23 @@ fn write_research(conn: &Connection, domain: &str, research: &str) -> Result<()>
     Ok(())
 }
 
-/// 1行を書く。`note` / `reviewed` は `None` の項目を**触らない** ——
+/// 1行を書く。`note` / `reviewed` は `None` の項目を触らない ——
 /// 「メモだけ保存」と「確認済みにする」が互いの値を巻き込まないようにするため。
 fn upsert(
     conn: &Connection,
     domain: &str,
     note: Option<&str>,
     reviewed: Option<bool>,
-    verdict: Option<&str>,
 ) -> rusqlite::Result<()> {
     let updated_at = chrono::Local::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO domain_notes (domain, updated_at, note, reviewed, verdict)
-         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0), COALESCE(?5, ''))
+        "INSERT INTO domain_notes (domain, updated_at, note, reviewed)
+         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0))
          ON CONFLICT(domain) DO UPDATE SET
              updated_at = excluded.updated_at,
              note       = COALESCE(?3, domain_notes.note),
-             reviewed   = COALESCE(?4, domain_notes.reviewed),
-             verdict    = COALESCE(?5, domain_notes.verdict)",
-        rusqlite::params![domain, updated_at, note, reviewed, verdict],
+             reviewed   = COALESCE(?4, domain_notes.reviewed)",
+        rusqlite::params![domain, updated_at, note, reviewed],
     )?;
     Ok(())
 }
@@ -784,7 +762,7 @@ fn upsert(
 /// 何も持たなくなった行を消す(未確認 + メモ空)。
 /// 残しても害は無いが、`/api/domains` が件数0の行として一覧に足してしまう。
 fn cleanup(conn: &Connection, domain: &str) -> rusqlite::Result<()> {
-    // **調査結果が入っている行は消さない。** メモが空でも、30秒かけて調べた結果は
+    // 調査結果が入っている行は消さない。 メモが空でも、30秒かけて調べた結果は
     // 残しておきたい（消すと押し直すまで戻らない）
     conn.execute(
         "DELETE FROM domain_notes
@@ -795,8 +773,8 @@ fn cleanup(conn: &Connection, domain: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// 古いDBを今の形に合わせる。**マイグレーション機構は持たない**(個人運用なので、
-/// 起動時にこの関数が差分を埋める)。**どの手順も「もう済んでいるか」を見てから実行する**
+/// 古いDBを今の形に合わせる。マイグレーション機構は持たない(個人運用なので、
+/// 起動時にこの関数が差分を埋める)。どの手順も「もう済んでいるか」を見てから実行する
 /// ので、何度起動しても同じ結果になる。
 fn migrate(conn: &Connection) -> Result<()> {
     // 旧名は `reviewed_domains` —— 行があること = 確認済み だった頃の名前。
@@ -820,7 +798,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         tracing::info!("domain_notes.reviewed_at を updated_at へ改名した");
     }
 
-    // **既存行の既定は1**。この列より前に入っていた行は、すべて確認済みの記録だった
+    // 既存行の既定は1。この列より前に入っていた行は、すべて確認済みの記録だった
     if !column_exists(conn, "domain_notes", "reviewed")? {
         conn.execute_batch(
             "ALTER TABLE domain_notes ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1",
@@ -829,21 +807,14 @@ fn migrate(conn: &Connection) -> Result<()> {
         tracing::info!("domain_notes に reviewed 列を追加した(既存行は確認済みとして扱う)");
     }
 
-    // 判定(問題あり/問題なし)。**既存の確認済みは `ok` に倒している。**
-    //
-    // **この移行は意味の取り違えを含む。** 列を足した時点では「確認して納得した = 問題なし」と
-    // 読んでいたが、正しくは**ドメイン自身が問題のある通信かどうか**で、
-    // 広告・トラッカーの類は `issue`(ブロックされて当然)にあたる。
-    // 移行済みのデータは個人の手元の記録なので画面から付け直せばよく、
-    // **移行の規則は変えていない**(いま変えると、正しく付け直した `ok` まで巻き戻る)。
-    // 判定を持たない「確認済み」を残さないという狙い自体は今も同じ
-    if table_exists(conn, "domain_notes")? && !column_exists(conn, "domain_notes", "verdict")? {
-        conn.execute_batch(
-            "ALTER TABLE domain_notes ADD COLUMN verdict TEXT NOT NULL DEFAULT '';
-             UPDATE domain_notes SET verdict = 'ok' WHERE reviewed = 1;",
-        )
-        .context("verdict列を追加できない")?;
-        tracing::info!("domain_notes に verdict 列を追加した(既存の確認済みは ok として扱う。画面から付け直せる)");
+    // 判定(問題あり / 問題なし)をやめて「確認済み」の1状態に戻した。列ごと落とす ——
+    // 読まなくなった列を残すと、次にこのテーブルを読む人が「どちらが本当の状態か」を
+    // 確かめることになる。確認済みかどうかは `reviewed` に残るので、
+    // 消えるのは「どちらだったか」だけ
+    if table_exists(conn, "domain_notes")? && column_exists(conn, "domain_notes", "verdict")? {
+        conn.execute_batch("ALTER TABLE domain_notes DROP COLUMN verdict")
+            .context("verdict列を削除できない")?;
+        tracing::info!("domain_notes の verdict 列を削除した(状態は確認済みだけになった)");
     }
 
     // 「詳しく調べる」の結果はメモと別に持つ（この列より前のDBには無い）
