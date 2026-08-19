@@ -487,7 +487,12 @@ function closeModal() {
   pendingDomain = null;
 }
 
-function onOverlayClick(event) {
+// 覆いを押して閉じるのは **mousedown**（click ではない）。click は mousedown と mouseup が
+// 同じ要素で起きたときに発火し、押した場所と離した場所が違えば**共通の祖先**で発火する ——
+// モーダルの中の文章をドラッグで選んで覆いの上で指を離すと、覆いで click が起きて閉じてしまい、
+// コピーしようとしただけで内容ごと消える。mousedown なら押した場所そのものが対象なので、
+// 中から始めたドラッグは外で離しても閉じない。**5つの覆いすべて同じ規則**。
+function onOverlayMouseDown(event) {
   if (event.target === document.getElementById('modal')) closeModal();
 }
 
@@ -519,7 +524,7 @@ function closeDetailModal() {
   detailDomain = null;
 }
 
-function onDetailOverlayClick(event) {
+function onDetailOverlayMouseDown(event) {
   if (event.target === document.getElementById('detail-modal')) closeDetailModal();
 }
 
@@ -788,7 +793,7 @@ function closeBulkModal() {
   document.getElementById('bulk-modal').style.display = 'none';
 }
 
-function onBulkOverlayClick(event) {
+function onBulkOverlayMouseDown(event) {
   if (event.target === document.getElementById('bulk-modal')) closeBulkModal();
 }
 
@@ -941,7 +946,7 @@ function closeAiModal() {
   aiModalMessage = null;
 }
 
-function onAiOverlayClick(event) {
+function onAiOverlayMouseDown(event) {
   if (event.target === document.getElementById('ai-modal')) closeAiModal();
 }
 
@@ -1129,7 +1134,7 @@ function closeSettingsModal() {
   document.getElementById('settings-modal').style.display = 'none';
 }
 
-function onSettingsOverlayClick(event) {
+function onSettingsOverlayMouseDown(event) {
   if (event.target === document.getElementById('settings-modal')) closeSettingsModal();
 }
 
@@ -1139,6 +1144,11 @@ function setDiagRunning(running) {
   document.getElementById('diag-trace-btn').disabled = running;
 }
 
+// **途中経過を1行ずつ出す**（NDJSON）。ping は4回・経路は応答しないホップがあると
+// 数十秒かかるので、終わるまで待つと「打てているのか」が画面から分からない。
+//
+// **行は配列で持ち直す。** 名前（`name`）は経路が出そろってから届いて**既に出した行に
+// 足される**ので、文字列に継ぎ足していく作りだと書き足す先を指せない。
 async function runDiag(tool) {
   const target = document.getElementById('diag-target').value.trim();
   const commandBox = document.getElementById('diag-command');
@@ -1151,31 +1161,102 @@ async function runDiag(tool) {
   outputBox.hidden = true;
   outputBox.textContent = '';
 
-  let result;
+  const lines = [];
+  const names = [];
+  let command = '';
+
+  // **名前はIPのすぐ後ろに差し込む。** 行末に足すと、桁を揃えるための空白のぶんだけ
+  // 右へ流れて**画面の外に出る**（出力の箱は横スクロールなので、横に送らないと読めない。
+  // 実測：名前は68字目から始まるが、設定のモーダルに入るのは62字ほど）。
+  // 続く空白を名前のぶんだけ詰めるので、応答時間の桁はたいてい動かない
+  // —— tracepath はIPの後ろに40字ほど空けている
+  const withName = (text, i) => {
+    const hop = names[i];
+    if (!hop) return text;
+    const at = text.indexOf(hop.ip);
+    const label = ` (${hop.name})`;
+    if (at < 0) return `${text}${label}`;
+    const head = text.slice(0, at + hop.ip.length);
+    let rest = text.slice(at + hop.ip.length);
+    for (let eaten = 0; eaten < label.length && rest.startsWith(' '); eaten++) rest = rest.slice(1);
+    return `${head}${label}${rest}`;
+  };
+
+  const render = () => {
+    // **一番下を見ていたときだけ追いかける**（上を読み返している最中に引き戻さない）
+    const atBottom = outputBox.scrollTop + outputBox.clientHeight >= outputBox.scrollHeight - 4;
+    outputBox.hidden = false;
+    outputBox.textContent = lines.map(withName).join('\n');
+    if (atBottom) outputBox.scrollTop = outputBox.scrollHeight;
+  };
+
+  const apply = event => {
+    if (event.t === 'start') {
+      command = event.command;
+      commandBox.textContent = `$ ${command}（実行中…）`;
+    } else if (event.t === 'line') {
+      lines[event.index] = event.text;
+      render();
+    } else if (event.t === 'name') {
+      names[event.index] = {ip: event.ip, name: event.name};
+      render();
+    } else if (event.t === 'end') {
+      // 走らせたコマンドと、かかった時間を添える。**終了コードが0でなくても結果は出す**
+      // （応答が無いのも結果のうち）
+      commandBox.textContent = `$ ${command}（${(event.elapsed_ms / 1000).toFixed(1)}秒`
+        + `${event.ok ? '' : ' / 応答なしか失敗'}）`;
+      if (!lines.length) { outputBox.hidden = false; outputBox.textContent = '（出力はありませんでした）'; }
+    } else if (event.t === 'error') {
+      // **理由は画面に残す**（トーストは消えるので、打ち直すときに読めない）
+      commandBox.textContent = event.message;
+    }
+  };
+
+  // 受け取ったぶんを行で切って読む。**チャンクの切れ目は行の途中にも来る**ので、
+  // 最後の改行までを処理して残りは次のチャンクへ持ち越す
+  let buffer = '';
+  const consume = chunk => {
+    buffer += chunk;
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const raw = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!raw) continue;
+      try { apply(JSON.parse(raw)); } catch(e) { /* 読めない行は捨てる（次の行で追いつく） */ }
+    }
+  };
+
   try {
     const resp = await fetch('/api/diag', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({tool, target})
     });
-    result = await resp.json();
+    if (!resp.ok) {
+      // 打てなかった（相手先の形が悪い・コマンドが無い）。理由は400のJSONで来る
+      const result = await resp.json().catch(() => ({}));
+      commandBox.textContent = result.error || '打てませんでした';
+      setDiagRunning(false);
+      return;
+    }
+    if (resp.body && resp.body.getReader) {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        consume(decoder.decode(value, {stream: true}));
+      }
+      consume(decoder.decode());
+    } else {
+      // 途中経過が読めない環境（古いブラウザ）。**打てないよりはよい** ——
+      // 全部届いてから同じ手順で流し込む
+      consume(await resp.text());
+    }
   } catch(e) {
-    result = {success: false, error: '通信に失敗しました'};
+    commandBox.textContent = '通信に失敗しました';
   }
   setDiagRunning(false);
-
-  if (!result.success) {
-    // **理由は画面に残す**（トーストは消えるので、打ち直すときに読めない）
-    commandBox.textContent = result.error || '打てませんでした';
-    return;
-  }
-
-  // 走らせたコマンドと、かかった時間を添える。**終了コードが0でなくても結果は出す**
-  // （応答が無いのも結果のうち）
-  commandBox.textContent = `$ ${result.command}（${(result.elapsed_ms / 1000).toFixed(1)}秒`
-    + `${result.ok ? '' : ' / 応答なしか失敗'}）`;
-  outputBox.hidden = false;
-  outputBox.textContent = result.output || '（出力はありませんでした）';
 }
 
 // ---- 下に引っ張って更新 ----

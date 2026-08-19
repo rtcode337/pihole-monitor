@@ -99,6 +99,12 @@
    個別に `.foo[hidden]` を書いて回るのではなく、ここで一度だけ効かせる */
 [hidden] { display: none !important; }
 
+/* プレースホルダーは入力済みの値と見間違えない濃さにする。ブラウザ既定は本文に近い濃さで、
+   **何か入力してあるように見える**（実際に経路の相手先やメモが設定済みに見えた）。
+   個別のセレクタで書いて回ると、欄を足すたびに書き忘れて濃いままの欄が混ざるので、
+   ここで一度だけ効かせる */
+::placeholder { color: var(--c-dim); opacity: 1; }
+
 body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   background: var(--c-bg);
@@ -710,7 +716,6 @@ a.reason-link:hover {
   max-width: 100%;
 }
 
-.ai-token::placeholder { color: var(--c-dim); }
 .ai-token:focus { outline: none; border-color: var(--c-blue); }
 
 .ai-hint {
@@ -949,7 +954,6 @@ a.reason-link:hover {
   margin-bottom: 16px;
 }
 
-.modal-note::placeholder { color: var(--c-dim); }
 .modal-note:focus { outline: none; border-color: var(--c-blue); }
 
 .modal-actions {

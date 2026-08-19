@@ -110,7 +110,7 @@
 
 <div class="toast" id="toast"></div>
 
-<div class="modal-overlay" id="modal" style="display:none" onclick="onOverlayClick(event)">
+<div class="modal-overlay" id="modal" style="display:none" onmousedown="onOverlayMouseDown(event)">
   <div class="modal">
     <div class="modal-title">メモ</div>
     <div class="modal-domain" id="modal-domain"></div>
@@ -129,7 +129,7 @@
 <!-- 行を押すと開く詳細。**狭い画面ではここが本体** —— 行に全部を並べると
      ドメインとメモの幅が潰れて読めなくなるので、全文と操作をここで受け持つ。
      中身（状態・ブロック回数・メモ・操作）はJSが組む -->
-<div class="modal-overlay" id="detail-modal" style="display:none" onclick="onDetailOverlayClick(event)">
+<div class="modal-overlay" id="detail-modal" style="display:none" onmousedown="onDetailOverlayMouseDown(event)">
   <div class="modal">
     <div class="modal-title">詳細</div>
     <div class="detail-body" id="detail-body"></div>
@@ -138,7 +138,7 @@
 </div>
 
 <!-- まとめてAIに聞く。対象と進捗はJSが組む -->
-<div class="modal-overlay" id="bulk-modal" style="display:none" onclick="onBulkOverlayClick(event)">
+<div class="modal-overlay" id="bulk-modal" style="display:none" onmousedown="onBulkOverlayMouseDown(event)">
   <div class="modal">
     <div class="modal-title">まとめてAIに聞く</div>
     <div class="bulk-note" id="bulk-note"></div>
@@ -164,7 +164,7 @@
 </div>
 
 <!-- 聞く相手を選ぶ。中身（相手・モデル・考える量）はChiezoに問い合わせてJSが組む -->
-<div class="modal-overlay" id="ai-modal" style="display:none" onclick="onAiOverlayClick(event)">
+<div class="modal-overlay" id="ai-modal" style="display:none" onmousedown="onAiOverlayMouseDown(event)">
   <div class="modal">
     <div class="modal-title">聞く相手を選ぶ（複数選べます）</div>
     <div class="ai-note" id="ai-note"></div>
@@ -184,7 +184,7 @@
 <!-- 設定。いまの中身はネットワークの確認（ping / 経路）だけ。
      **一覧の判定には関わらない** —— 名前を引いた記録だけでは「その先に届くのか」が
      分からないので、手で叩ける場所を用意してある -->
-<div class="modal-overlay" id="settings-modal" style="display:none" onclick="onSettingsOverlayClick(event)">
+<div class="modal-overlay" id="settings-modal" style="display:none" onmousedown="onSettingsOverlayMouseDown(event)">
   <div class="modal">
     <div class="modal-title">設定</div>
 

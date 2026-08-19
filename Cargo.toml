@@ -7,7 +7,17 @@ rust-version = "1.97"
 [dependencies]
 # Webフレームワーク。tokio + hyper の上に乗る薄いルーター
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
+# io-util / sync は疎通確認（diag.rs）の途中経過を1行ずつ流すために使う
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "time",
+    "io-util",
+    "sync",
+] }
+# mpsc の受け口を HTTP のボディ（Stream）にするためだけの薄い層。tokio 本体と同じ作者
+tokio-stream = { version = "0.1", default-features = false }
 
 # Pi-hole APIを叩くHTTPクライアント。
 # OpenSSLの共有ライブラリに依存しないよう native-tls ではなく rustls を使う

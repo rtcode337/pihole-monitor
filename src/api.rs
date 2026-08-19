@@ -2,18 +2,22 @@
 
 use std::collections::{HashMap, HashSet};
 
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{StreamExt, iter as stream_iter};
 
 use crate::ai::{
     Ai, AiChoice, AskError, AskMode, BRIDGE_BACKEND, BRIDGE_LABEL, MAX_DOMAINS_PER_ASK,
 };
 use crate::db::Db;
+use crate::diag::Event as DiagEvent;
 use crate::pihole::PiholeClient;
 
 /// ハンドラ間で共有する依存。いずれも中身は `Arc` か `Clone` が安いものなので、
@@ -551,24 +555,55 @@ struct DiagRequest {
 ///
 /// **結果は加工せずに返す。** 見たいのは応答時間・欠落・どのホップで止まったかで、
 /// こちらで要約すると落ちる。**終了コードが0でなくても失敗ではない**
-/// (応答が無いのも結果のうち)ので、成功として本文と一緒に返す。
+/// (応答が無いのも結果のうち)ので、エラーにはせず `end` に添えて返す。
+///
+/// **応答は溜めずに流す**(1行1JSON = NDJSON)。ping は4回・経路は応答しないホップが
+/// あると数十秒かかるので、終わるまで待たせると画面が止まって見える。
+/// 種類は4つ —— `start`(走らせたコマンド)/ `line`(出力の1行)/ `name`(その行のIPの名前。
+/// **後から届いて行に足される**)/ `end`(終了コードとかかった時間)、それに `error`。
+///
+/// **打てなかったときだけ400のJSON**(相手先の形が悪い・コマンドが無い)——
+/// 流し始めてから言うと、画面は 200 を受け取った後でエラーを読むことになる。
 async fn diag(State(_state): State<AppState>, Json(req): Json<DiagRequest>) -> Response {
     let Some(tool) = crate::diag::Tool::parse(&req.tool) else {
         return bad_request("ping か traceroute を指定してください");
     };
 
-    match crate::diag::run(tool, &req.target).await {
-        Ok(outcome) => Json(json!({
-            "success": true,
-            "command": outcome.command,
-            "output": outcome.output,
-            "ok": outcome.ok,
-            "elapsed_ms": outcome.elapsed_ms,
-        }))
-        .into_response(),
-        // 打てなかった(相手先の形が悪い・コマンドが無い・時間切れ)。理由をそのまま出す
-        Err(message) => bad_request(&message),
-    }
+    let session = match crate::diag::start(tool, &req.target) {
+        Ok(session) => session,
+        Err(message) => return bad_request(&message),
+    };
+
+    // 走らせたコマンドを先に流す。**画面はこれを見て「実行中」の見出しを出す**
+    let head = stream_iter([ndjson(&json!({
+        "t": "start",
+        "command": session.command,
+    }))]);
+    let body = head.chain(ReceiverStream::new(session.events).map(|event| {
+        ndjson(&match event {
+            DiagEvent::Line { index, text } => json!({"t": "line", "index": index, "text": text}),
+            DiagEvent::Name { index, ip, name } => {
+                json!({"t": "name", "index": index, "ip": ip, "name": name})
+            }
+            DiagEvent::End { ok, elapsed_ms } => {
+                json!({"t": "end", "ok": ok, "elapsed_ms": elapsed_ms})
+            }
+            DiagEvent::Error { message } => json!({"t": "error", "message": message}),
+        })
+    }));
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        // 途中経過なので溜めさせない(間に入るものが溜めると流す意味が無くなる)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Accel-Buffering", "no")
+        .body(Body::from_stream(body))
+        .expect("ヘッダは固定値なので組み立てに失敗しない")
+}
+
+/// 1行1JSON。**流す側で改行まで付ける**(受け取る側は行で切るだけでよい)。
+fn ndjson(value: &serde_json::Value) -> Result<String, std::convert::Infallible> {
+    Ok(format!("{value}\n"))
 }
 
 /// `claude setup-token` で発行したトークンを保存する。
