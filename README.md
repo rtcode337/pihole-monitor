@@ -24,7 +24,7 @@ cp .env.example .env
 | `PIHOLE_BASE_URL` | Pi-holeのURL | `http://pihole:80` |
 | `PIHOLE_WEB_URL` | Pi-hole管理画面のURL（監視の「理由」からクエリログへ飛ぶのに使う。開くのはブラウザなので別に持てる） | `PIHOLE_BASE_URL`と同じ |
 | `PIHOLE_PASSWORD` | Pi-holeの管理パスワード | 空文字 |
-| `CHIEZO_BASE_URL` | Chiezo（LAN内の知識サーバー）のルートURL。入れると聞く相手を画面から選べる | 空文字（使わない） |
+| `CHIEZO_BASE_URL` | [Chiezo](https://github.com/rtcode337/chiezo)（自分で立てる知識サーバー）のルートURL。入れると聞く相手を画面から選べる | 空文字（使わない） |
 | `CHIEZO_TIMEOUT` | Chiezo越しの生成1回のタイムアウト秒数 | `180` |
 | `CLAUDE_TIMEOUT` | 同梱のCLIへの問い合わせのタイムアウト秒数 | `60` |
 | `CLAUDE_MODEL` | CLIに使わせるモデル（空ならCLIの既定） | 空 |
@@ -108,7 +108,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 
 | 経路 | 相手 | 認証 |
 |---|---|---|
-| **Chiezo**（LAN内の知識サーバー） | Chiezoに登録してある全部（Claude Code / Codex / …） | **不要**（鍵はChiezoが持っている） |
+| **[Chiezo](https://github.com/rtcode337/chiezo)**（自分で立てる知識サーバー） | Chiezoに登録してある全部（Claude Code / Codex / …） | **不要**（鍵はChiezoが持っている） |
 | **同梱のCLI**（イメージに入っている `claude`） | Claude Code だけ | `claude setup-token` のトークンを画面から登録 |
 
 どちらの経路でも聞く内容（プロンプト）は同じ。結果には**誰が書いたか**が付く
@@ -140,6 +140,9 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 - メモは1〜2文で書かせている（一覧に並ぶので、長いと読めない）
 
 ### Chiezo経由（相手を画面で選ぶ）
+
+[Chiezo](https://github.com/rtcode337/chiezo) は別のリポジトリで公開している知識サーバーで、
+複数のAIへの口を1つにまとめて持っている（鍵もあちらが持つ）。使わなくてもこのアプリは動く。
 
 `CHIEZO_BASE_URL` に Chiezo の**ルートURL**（`http://192.168.1.x:7010`。**`/v1` は付けない**）を
 入れて起動すると、設定のページで相手・モデル・考える量を選べる。
