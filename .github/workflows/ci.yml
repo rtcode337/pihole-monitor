@@ -1,0 +1,78 @@
+# PR と main への push でテストを回す。
+# build-and-push-image はイメージを作るだけでテストを実行しないため、依存更新
+# (Dependabot)や手直しの PR はここが通ってからマージする。
+#
+# 公開リポジトリなので標準ランナーの実行時間は無料枠の外。
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同じ ref への連続 push では古い実行を打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ツールチェーンは Dockerfile のビルドステージ(rust:1.97.1-slim-trixie)と合わせる。
+      # 手元とCIで版がずれると、片方だけ通る状態になる
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+
+      # ビルド結果と取得済みクレートを実行間で使い回す。
+      # 依存を変えない PR ではコンパイルし直さない
+      - uses: Swatinem/rust-cache@v2
+
+      # テストは PostgreSQL も Pi-hole も要らない(外へ出るものは全部この中で完結する)
+      - run: cargo test --locked
+
+      # テストが通ってもリリースビルドが通らないことがある(LTO と codegen-units=1 は
+      # 別物のコンパイル)。イメージのビルドで初めて落ちるのを避けるため、ここで通す
+      - run: cargo build --release --locked
+
+  # Dependabot の PR のうち、破壊的でない更新(patch / minor)を自動でマージする。
+  #
+  # needs: test が唯一のゲート —— ブランチ保護は掛けていない運用なので、
+  # 「CI が通ってからマージする」をジョブの依存関係で表している。
+  # major は自動で入れない(壊れ方が読めないので人が見る)。
+  auto-merge:
+    needs: test
+    if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # マージ後にイメージのビルドを起こすために要る(下の理由を参照)
+      actions: write
+    steps:
+      - name: 更新の種類を読む
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      - name: patch / minor ならマージする
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        run: gh pr merge --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GITHUB_TOKEN で作った push は workflow を起こさないので、このままだと
+      # 依存が main に入ってもイメージが作り直されない。workflow_dispatch は
+      # GITHUB_TOKEN でも発火する例外なので、明示的に起こす
+      - name: イメージのビルドを起こす
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        run: gh workflow run build-and-push-image.yml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
