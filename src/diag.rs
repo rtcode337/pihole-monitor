@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn only_hostname_and_ip_characters_pass() {
         assert_eq!(validate_target(" example.com ").unwrap(), "example.com");
-        assert_eq!(validate_target("192.168.0.4").unwrap(), "192.168.0.4");
+        assert_eq!(validate_target("192.0.2.4").unwrap(), "192.0.2.4");
         assert!(validate_target("2001:db8::1").is_ok());
         assert!(validate_target("_dmarc.example.com").is_ok());
     }
@@ -546,8 +546,8 @@ mod tests {
     fn hop_address_is_found_wherever_it_sits_on_the_line() {
         // tracepath
         assert_eq!(
-            hop_ip(" 2:  192.168.1.1                       0.882ms "),
-            Some("192.168.1.1".parse().unwrap())
+            hop_ip(" 2:  192.0.2.1                         0.882ms "),
+            Some("192.0.2.1".parse().unwrap())
         );
         // tracepath（pmtu が後ろに付く行）
         assert_eq!(

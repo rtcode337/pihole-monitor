@@ -842,12 +842,12 @@ mod tests {
     fn one_liner_takes_the_first_heading_in_either_shape() {
         // 見出しの次の行に書かれる形
         let body = "■ ひとことでいうと(一覧に出すので1〜2文)\n\
-                    QNAPのNASがクラウド連携に使うドメイン。使っているなら放置してよい。\n\
+                    NASがクラウド連携に使うドメイン。使っているなら放置してよい。\n\
                     \n\
-                    ■ 何のドメインか(運営元と用途)\n台湾のQNAP…";
+                    ■ 何のドメインか(運営元と用途)\nストレージ機器の製造元…";
         assert_eq!(
             one_liner(body).as_deref(),
-            Some("QNAPのNASがクラウド連携に使うドメイン。使っているなら放置してよい。")
+            Some("NASがクラウド連携に使うドメイン。使っているなら放置してよい。")
         );
 
         // 見出しと同じ行に続けて書かれる形(全角コロンも)
@@ -859,7 +859,7 @@ mod tests {
 
         // 見出しが無ければ None。 そのときはメモを触らない
         // (勝手に本文の頭を切り出すと、途中で切れた文が一覧に並ぶ)
-        assert_eq!(one_liner("■ 何のドメインか\n台湾のQNAP…"), None);
+        assert_eq!(one_liner("■ 何のドメインか\nストレージ機器の製造元…"), None);
         assert_eq!(one_liner("■ ひとことでいうと\n\n■ 次"), None);
     }
 
