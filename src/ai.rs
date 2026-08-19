@@ -674,6 +674,12 @@ impl Ai {
     pub fn save_token(&self, token: &str) -> anyhow::Result<()> {
         self.claude.save_token(token)
     }
+
+    /// 保存したトークンを消す。値を入れ替えるだけなら保存でよいので、
+    /// これは「この端末に置くのをやめる」ための口。
+    pub fn delete_token(&self) -> anyhow::Result<()> {
+        self.claude.delete_token()
+    }
 }
 
 /// 「ひとことでいうと」の中身を切り出す(見つからなければ `None`)。

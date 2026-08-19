@@ -94,6 +94,12 @@ impl ClaudeClient {
         }
     }
 
+    /// 画面から消す。失敗は理由ごと返す ——
+    /// 認証エラーで落とすとき(clear_token)と違い、押した人が結果を待っている。
+    pub fn delete_token(&self) -> Result<()> {
+        self.write_credential(None)
+    }
+
     /// Claude に聞く。プロンプトは受け取る —— 相手が Chiezo 越しでも同じ文言に
     /// なるよう、指示文は `ai.rs` の1か所に置いてある。
     pub async fn ask(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AskError> {

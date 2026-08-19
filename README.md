@@ -103,7 +103,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 
 ## AIに聞く機能について
 
-経路は2つあり、**どちらで聞くかは画面から切り替えられる**（右上の「AI: …」ボタン）。
+経路は2つあり、**どちらで聞くかは画面から切り替えられる**（設定のページ）。
 選択はDB（`data/monitor.db` の `settings` 表）に入るので、**再起動なしで反映される**。
 
 | 経路 | 相手 | 認証 |
@@ -142,7 +142,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 ### Chiezo経由（相手を画面で選ぶ）
 
 `CHIEZO_BASE_URL` に Chiezo の**ルートURL**（`http://192.168.1.x:7010`。**`/v1` は付けない**）を
-入れて起動すると、「AI: …」ボタンから相手・モデル・考える量を選べる。
+入れて起動すると、設定のページで相手・モデル・考える量を選べる。
 未設定のあいだは選択肢が同梱のCLI 1つだけになる。
 
 - 相手の一覧は Chiezo の `/v1/ai/backends`、生成は `/v1/ai/complete` から取る
@@ -161,7 +161,8 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 
 課金される従量課金APIキーではなく、**`claude setup-token` で発行した長期OAuthトークン**を使う方式を取っている。ホストの`~/.claude`はマウントしない。
 
-- **トークンの設定は「AI: …」ボタンで開くダイアログの中**（同梱のCLIの行に貼り付けて「保存」）。登録済みかどうかもそこに出る（値は表示しない）。Chiezo の相手を選んでいるときは不要
+- **トークンの設定は設定のページ**（同梱のCLIの行に貼り付けて「保存」）。登録済みかどうかもそこに出る（値は表示しない）。**「削除」で消せる**。Chiezo の相手を選んでいるときは不要。
+  設定していないままAIのボタンを押すと、その旨と設定への入口が出る
 - ブラウザやターミナルが使える別の端末で `claude setup-token` を実行し、表示されたトークンを貼り付けて保存する。未登録のまま聞こうとしたときは、そのダイアログが自動で開く
 - 保存されたトークンは `data/state/settings.db` に入り（`0600`）、問い合わせのたびに読んで**子プロセスの環境変数**で渡す。入れ替えても再起動は要らない
 - 以前の `data/claude_token` が残っている環境では、初回の問い合わせ時に自動で移し替える（移した後にファイルは消える）

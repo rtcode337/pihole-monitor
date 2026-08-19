@@ -64,7 +64,10 @@ pub fn router() -> Router<AppState> {
         // 「どちらの値が効いているのか」を画面が説明し続けることになる
         .route("/api/settings", get(settings_get).post(settings_post))
         .route("/api/ai", get(ai_get).post(ai_post))
-        .route("/api/claude-token", post(claude_token))
+        .route(
+            "/api/claude-token",
+            post(claude_token).delete(claude_token_delete),
+        )
 }
 
 #[derive(Serialize)]
@@ -660,6 +663,15 @@ async fn claude_token(State(state): State<AppState>, Json(req): Json<TokenReques
     match state.ai.save_token(token) {
         Ok(()) => success(),
         Err(e) => internal_error(e, "トークンを保存できない"),
+    }
+}
+
+/// 保存したトークンを消す。消しても選択は残す —— 入れ直せば元の相手に戻る
+/// (Chiezo の相手を選んでいれば、トークンが無くてもそのまま聞ける)。
+async fn claude_token_delete(State(state): State<AppState>) -> Response {
+    match state.ai.delete_token() {
+        Ok(()) => success(),
+        Err(e) => internal_error(e, "トークンを削除できない"),
     }
 }
 

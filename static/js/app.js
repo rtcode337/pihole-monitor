@@ -23,7 +23,6 @@ let bulkRunning = false;
 // 行のDOMは renderDomains() で作り直されるので、ボタン側に状態を持たせると消える
 const askingDomains = new Set();
 // 相手を選ぶモーダルを開くときに出したい一言（トークン未登録で開いたときなど）
-let aiModalMessage = null;
 // 詳細を開いているドメイン。ドメイン名だけを持つ（オブジェクトを持つと、
 // AIに聞いた後の allDomains の更新が詳細に映らない）
 let detailDomain = null;
@@ -584,6 +583,9 @@ function editNoteFromDetail(domain, note) {
 // 結果はそのままメモになる（保存はサーバ側で済んでいる）。
 
 async function askOne(domain) {
+  // AIが1つも設定されていないなら、送る前に止めて設定へ案内する
+  // （送っても必ず失敗するので、押した人には「動かない」としか見えない）
+  if (!aiConfigured()) { openAiNotice(); return; }
   if (askingDomains.has(domain)) return;
   askingDomains.add(domain);
   renderDomains();
@@ -608,9 +610,9 @@ async function askOne(domain) {
   askingDomains.delete(domain);
 
   if (result.error === 'token_required') {
-    // トークンが要るのはCLIブリッジ経由のとき。設定はそこにあるので相手を選ぶモーダルを開く
+    // トークンが要るのは同梱のCLIが相手のとき。設定のページへ案内する
     renderDomains();
-    openAiModal('トークンが未登録です。CLIブリッジの行に貼り付けて保存するか、Chiezo の相手を選んでください。');
+    openAiNotice('トークンが未登録です。設定のページでトークンを登録するか、Chiezo の相手を選んでください。');
     return;
   }
 
@@ -654,6 +656,9 @@ async function askFollowup() {
   if (!domain || askingDomains.has(domain)) return;
   const question = (followupDraft || '').trim();
   if (!question) { showToast('聞きたいことを入れてください', 'error'); return; }
+  // AIが1つも設定されていないなら、送る前に止めて設定へ案内する
+  // （送っても必ず失敗するので、押した人には「動かない」としか見えない）
+  if (!aiConfigured()) { openAiNotice(); return; }
 
   askingDomains.add(domain);
   renderDomains();
@@ -679,7 +684,7 @@ async function askFollowup() {
 
   if (result.error === 'token_required') {
     renderDomains();
-    openAiModal('トークンが未登録です。CLIブリッジの行に貼り付けて保存するか、Chiezo の相手を選んでください。');
+    openAiNotice('トークンが未登録です。設定のページでトークンを登録するか、Chiezo の相手を選んでください。');
     return;
   }
 
@@ -751,6 +756,9 @@ function saveBulkLimit(input) {
 
 function openBulkModal() {
   if (bulkRunning) { document.getElementById('bulk-modal').style.display = 'flex'; return; }
+  // AIが1つも設定されていないなら、送る前に止めて設定へ案内する
+  // （送っても必ず失敗するので、押した人には「動かない」としか見えない）
+  if (!aiConfigured()) { openAiNotice(); return; }
   document.getElementById('bulk-limit').value = bulkLimit();
 
   const targets = bulkTargets();
@@ -842,7 +850,7 @@ async function runBulkAsk() {
       runBtn.disabled = false;
       closeBtn.disabled = false;
       document.getElementById('bulk-modal').style.display = 'none';
-      openAiModal('トークンが未登録です。CLIブリッジの行に貼り付けて保存するか、Chiezo の相手を選んでください。');
+      openAiNotice('トークンが未登録です。設定のページでトークンを登録するか、Chiezo の相手を選んでください。');
       return;
     }
 
@@ -891,7 +899,6 @@ async function loadAi() {
   } catch(e) {
     aiState = null;
   }
-  renderAiButton();
 }
 
 // いま聞く相手の名前（複数）。取れていないときも空にしない
@@ -904,34 +911,29 @@ function aiName() {
   return aiNames().join(' / ');
 }
 
-function renderAiButton() {
-  const names = aiNames();
-  // ボタンに出すのはメインの相手（サーバが先頭にそろえて返す）+ 残りの人数。
-  // 全員並べるとツールバーが名前で埋まるし、普段いちばん信用している相手が
-  // 出ていないとボタンを見る意味が薄い
-  const btn = document.getElementById('ai-btn');
-  btn.textContent = `AI: ${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ''}`;
-  btn.title = names.length > 1
-    ? `メイン: ${names[0]}（「詳しく調べる」の担当）／まとめて聞く相手: ${names.join(' / ')}`
-    : `聞く相手: ${names[0]}`;
+
+// AIが1つも使える状態になっていないか。トークンも無く、Chiezoの相手も選んでいなければ
+// 押しても必ず失敗するので、送る前に止めて設定へ案内する。
+// Chiezoの相手は鍵をあちらが持っているので、選んでいればトークンは要らない
+function aiConfigured() {
+  if (!aiState) return true;   // 状態が取れないときは止めない（サーバの答えに任せる）
+  if (aiState.token_saved) return true;
+  return (aiState.selections || []).some(sel => sel.backend !== aiState.cli_backend);
 }
 
-function openAiModal(message) {
-  aiModalMessage = message || null;
-  renderAiList();
-  document.getElementById('ai-modal').style.display = 'flex';
-  // 開いたときに一覧を取り直す。Chiezoを後から起動した場合に、
-  // 画面を読み直さなくても相手が出てくるようにする
-  loadAi().then(() => renderAiList());
+// AIがまだ使えないことを伝える。設定はページへ移したので、ここでは理由と行き先だけ出す
+function openAiNotice(message) {
+  document.getElementById('ai-notice-text').textContent =
+    message || 'まだ聞く相手が設定されていません。';
+  document.getElementById('ai-notice-modal').style.display = 'flex';
 }
 
-function closeAiModal() {
-  document.getElementById('ai-modal').style.display = 'none';
-  aiModalMessage = null;
+function closeAiNotice() {
+  document.getElementById('ai-notice-modal').style.display = 'none';
 }
 
-function onAiOverlayMouseDown(event) {
-  if (event.target === document.getElementById('ai-modal')) closeAiModal();
+function onAiNoticeOverlayMouseDown(event) {
+  if (event.target === document.getElementById('ai-notice-modal')) closeAiNotice();
 }
 
 // 「詳しく調べる」を頼む1人を選ぶラジオ。チェック（まとめて聞く相手）とは別の軸なので、
@@ -954,11 +956,7 @@ function renderAiList() {
     return;
   }
 
-  // 開いた理由（トークン未登録など）があれば、それを最優先で出す
-  if (aiModalMessage) {
-    note.className = 'ai-note error-text';
-    note.textContent = aiModalMessage;
-  } else if (!aiState.chiezo_url) {
+  if (!aiState.chiezo_url) {
     note.className = 'ai-note';
     note.innerHTML = 'Chiezo の URL が未設定です。環境変数 <code>CHIEZO_BASE_URL</code> に '
       + '<code>http://192.168.1.x:7010</code> のような URL を入れて起動すると、'
@@ -996,6 +994,9 @@ function renderAiList() {
         <input type="password" class="ai-token" id="token-input" autocomplete="off"
                placeholder="${aiState.token_saved ? '入れ替えるとき貼り付け' : 'トークンを貼り付け'}">
         <button type="button" class="action-btn review-btn" onclick="saveToken()">保存</button>
+        ${aiState.token_saved
+          ? '<button type="button" class="action-btn unreview-btn" onclick="deleteToken()" title="この端末から消す（入れ直せば元に戻る）">削除</button>'
+          : ''}
       </div>
     </div>
   `];
@@ -1029,6 +1030,12 @@ function renderAiList() {
   list.innerHTML = rows.join('');
 }
 
+function setAiStatus(message, kind) {
+  const el = document.getElementById('ai-status');
+  el.textContent = message;
+  el.className = `settings-status ${kind || ''}`;
+}
+
 async function saveAiSelection() {
   // チェックした全員を送る。 0人なら「未選択」= CLIブリッジに戻る
   const primary = document.querySelector('input[name="ai-primary"]:checked');
@@ -1051,18 +1058,40 @@ async function saveAiSelection() {
     });
     const result = await resp.json();
     if (result.success) {
-      closeAiModal();
       // 保存した値そのものを画面へ反映する（Chiezoへ聞き直さない）
       await loadAi();
-      showToast(`${(result.current || []).join(' / ')} に聞くようにしました`, 'success');
+      renderAiList();
+      setAiStatus(`${(result.current || []).join(' / ')} に聞きます`, 'ok');
+      showToast('聞く相手を保存しました', 'success');
     } else {
-      // 失敗の理由はモーダルに残す（閉じてしまうと読めない）
+      // 失敗の理由はその場に残す（トーストは消える）
       note.className = 'ai-note error-text';
       note.textContent = result.error || '保存に失敗しました';
+      setAiStatus('保存できませんでした', 'error');
     }
   } catch(e) {
     note.className = 'ai-note error-text';
     note.textContent = '保存に失敗しました';
+  }
+}
+
+// 保存したトークンを消す。入れ直せば元に戻るが、押し間違いだと次に聞いたときまで
+// 気づけないので確認を挟む
+async function deleteToken() {
+  if (!confirm('保存したトークンを削除します。よろしいですか？（入れ直せば元に戻ります）')) return;
+  try {
+    const resp = await fetch('/api/claude-token', {method: 'DELETE'});
+    const result = await resp.json();
+    if (result.success) {
+      await loadAi();
+      renderAiList();
+      setAiStatus('トークンを削除しました', 'ok');
+      showToast('トークンを削除しました', 'success');
+    } else {
+      setAiStatus(result.error || 'トークンを削除できませんでした', 'error');
+    }
+  } catch(e) {
+    setAiStatus('トークンを削除できませんでした', 'error');
   }
 }
 
@@ -1087,9 +1116,9 @@ async function saveToken() {
     if (result.success) {
       // 「登録済み」の表示を取り直す。保存の副作用でAIを呼ばない
       // （枠を使う操作は、押した人が改めて押して始める）
-      aiModalMessage = null;
       await loadAi();
       renderAiList();
+      setAiStatus('トークンを登録しました', 'ok');
       showToast('トークンを保存しました', 'success');
     } else {
       note.className = 'ai-note error-text';
@@ -1124,8 +1153,13 @@ function applyPage() {
     document.getElementById(`page-${name}`).hidden = name !== currentPage;
     document.getElementById(`page-btn-${name}`).classList.toggle('active', name === currentPage);
   }
-  // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになる
-  if (currentPage === 'settings') loadSettings();
+  // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになるし、
+  // Chiezoを後から起動した場合に、画面を読み直さなくても相手が出てくる
+  if (currentPage === 'settings') {
+    loadSettings();
+    setAiStatus('');
+    loadAi().then(renderAiList);
+  }
 }
 
 window.addEventListener('hashchange', applyPage);
@@ -1541,10 +1575,9 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiModal(); closeBulkModal(); }
+  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiNotice(); closeBulkModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
-    if (document.getElementById('ai-modal').style.display !== 'none') saveAiSelection();
     // 詳細の追加質問。書きかけがあるときだけ（開いているだけで反応させない）
     if (detailDomain && (followupDraft || '').trim()) askFollowup();
   }

@@ -92,7 +92,6 @@
   <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
        押す前に知りたいので、名前を隠して歯車だけにはしない。
        右端の3つは「相手 → まとめて聞く → 更新」の順（設定 → 実行 → 読み直し） -->
-  <button class="ai-btn" id="ai-btn" onclick="openAiModal()" title="ドメインについて聞くAIを選ぶ">AI: -</button>
   <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
@@ -118,6 +117,21 @@
 <!-- 設定のページ。モーダルではなくページにしてある ——
      ping / 経路の結果は数十行になるので、一覧に重ねると読むところが狭い -->
 <div id="page-settings" hidden>
+
+  <div class="settings-section">
+    <div class="detail-label">聞く相手（AI）</div>
+    <div class="ai-note" id="ai-note"></div>
+    <div class="ai-list" id="ai-list"></div>
+    <!-- トークンの入力欄は同梱のCLIの行の中（JSが組む）。取り方はここに一度だけ書く -->
+    <div class="ai-hint">
+      同梱のCLIのトークンは、手元の端末で <code>claude setup-token</code> を実行して出た値を
+      貼り付けて「保存」を押します（Chiezo の相手を選ぶときは要りません）。
+    </div>
+    <div class="diag-row">
+      <button class="action-btn confirm-btn" onclick="saveAiSelection()">選んだ相手を保存</button>
+      <span class="settings-status" id="ai-status"></span>
+    </div>
+  </div>
 
   <div class="settings-section">
     <div class="detail-label">Pi-holeから取り込む件数</div>
@@ -209,19 +223,19 @@
 </div>
 
 <!-- 聞く相手を選ぶ。中身（相手・モデル・考える量）はChiezoに問い合わせてJSが組む -->
-<div class="modal-overlay" id="ai-modal" style="display:none" onmousedown="onAiOverlayMouseDown(event)">
+<!-- AIがまだ使えないときの案内。設定はページへ移したので、ここでは
+     「なぜ動かないのか」と行き先だけを出す -->
+<div class="modal-overlay" id="ai-notice-modal" style="display:none" onmousedown="onAiNoticeOverlayMouseDown(event)">
   <div class="modal">
-    <div class="modal-title">聞く相手を選ぶ（複数選べます）</div>
-    <div class="ai-note" id="ai-note"></div>
-    <div class="ai-list" id="ai-list"></div>
-    <!-- トークンの入力欄はCLIブリッジの行の中（JSが組む）。取り方はここに一度だけ書く -->
+    <div class="modal-title">AIの設定がまだです</div>
+    <div class="ai-note error-text" id="ai-notice-text"></div>
     <div class="ai-hint">
-      CLIブリッジのトークンは、手元の端末で <code>claude setup-token</code> を実行して出た値を
-      貼り付けて「保存」を押します（Chiezo の相手を選ぶときは要りません）。
+      設定のページで、Chiezo の相手を選ぶか、同梱のCLIのトークン（<code>claude setup-token</code> で発行）を
+      登録すると使えるようになります。
     </div>
     <div class="modal-actions">
-      <button class="action-btn cancel-btn" onclick="closeAiModal()">閉じる</button>
-      <button class="action-btn confirm-btn" onclick="saveAiSelection()">保存</button>
+      <button class="action-btn cancel-btn" onclick="closeAiNotice()">閉じる</button>
+      <a class="action-btn confirm-btn" href="#settings" onclick="closeAiNotice()">設定をひらく</a>
     </div>
   </div>
 </div>

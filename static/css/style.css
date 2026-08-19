@@ -599,52 +599,6 @@ a.reason-link:hover {
 
 .unreview-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
-/* いま聞く相手を名前ごと出すボタン（押すと選択のモーダルが開く）。
-   更新ボタンと並べて右端に寄せる */
-.ai-btn {
-  margin-left: auto;
-  padding: 6px 14px;
-  border: 1px solid var(--c-amber-border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--c-amber);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-  max-width: 40vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-btn:hover { background: var(--c-amber-bg); }
-
-/* 設定。歯車だけの見た目にする —— 押す前に中身が分かる必要がある他のボタン
-   （相手の名前・件数）と違い、こちらは「設定」で用が足りる */
-.settings-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--c-border-strong);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--c-muted);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.settings-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
-
-/* 右端は「相手 → まとめて聞く → 設定 → 更新」。.ai-btn が右寄せを始めるので、
-   後ろに続くものは自動マージンを持たない */
-.ai-btn + .refresh-btn,
-.ai-btn + .bulk-btn,
-.ai-btn + .settings-btn,
-.bulk-btn + .settings-btn,
-.settings-btn + .refresh-btn,
-.bulk-btn + .refresh-btn { margin-left: 0; }
-
 /* 行の「AIに聞く」。押すと1件だけ聞いて、答えがそのままメモになる */
 .ask-ai-btn {
   border: 1px solid var(--c-amber-border);
@@ -659,7 +613,9 @@ a.reason-link:hover {
 
 /* ---- まとめてAIに聞く ---- */
 
+/* 右端の組。ここから右へ寄せる（かつては .ai-btn が始めていた） */
 .bulk-btn {
+  margin-left: auto;
   padding: 6px 14px;
   border: 1px solid var(--c-amber-border);
   border-radius: 4px;
@@ -673,6 +629,8 @@ a.reason-link:hover {
   align-items: center;
   gap: 4px;
 }
+
+.bulk-btn + .refresh-btn { margin-left: 0; }
 
 .bulk-btn:hover { background: var(--c-amber-bg); }
 
@@ -768,9 +726,8 @@ a.reason-link:hover {
 }
 
 .ai-list {
-  /* 相手が増えても モーダルが画面から溢れないようにする */
-  max-height: 45vh;
-  overflow-y: auto;
+  /* ページ全体のスクロールに任せる。ここで頭打ちにすると、外側と中とで
+     スクロールする場所が2つになり、どちらが動くのか指の位置で変わる */
   margin-bottom: 16px;
 }
 
