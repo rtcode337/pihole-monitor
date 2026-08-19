@@ -1,0 +1,47 @@
+# 依存の更新 PR を週 1 でまとめて受け取る(月曜 JST)。脆弱性対応の security updates とは別で、
+# こちらは「普段の更新」を定期的に上げるための設定。
+#
+# 公開リポジトリなので Actions の実行時間は無料枠の外(標準ランナーは無料)。
+# イメージのビルド(build-and-push-image)は main への push でしか走らないため、
+# PR が増えてもビルドの実行時間は増えない。
+version: 2
+updates:
+  # Rust の依存(Cargo.toml / Cargo.lock はリポジトリのルートに1つ)
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Tokyo
+    # minor・patch は 1 本の PR にまとめる(個別 PR の洪水を避ける)。major だけ個別 PR
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # Dockerfile のベースイメージ(rust / debian と、CLI を取り出す node)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Tokyo
+    ignore:
+      # Debian のメジャー(コードネーム)は自動で上げない。ビルド側と実行側で
+      # そろっていないと glibc の版が食い違って実行ファイルが動かないので、
+      # 上げるときは rust と debian を一緒に手で動かす
+      - dependency-name: "debian"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "rust"
+        update-types: ["version-update:semver-major"]
+      # Node のメジャーは LTS 入りしたものだけを使う(Current は追わない)。
+      # ここの node は Claude Code の CLI を取り出すビルドステージだけで使う
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions(actions/checkout 等。ランタイム非推奨化への追従もこれで拾う)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Tokyo

@@ -1,13 +1,14 @@
 # Dockerイメージをビルドして GHCR(ghcr.io)へ公開するワークフロー。
 #
 # デプロイ先は `docker compose pull` でこのイメージを取得して動かす前提。
-# ビルドするのは linux/amd64 のみ(非公開リポジトリではActions実行時間もGHCRの
-# ストレージもプランの無料枠を消費する。arm64のネイティブランナーは公開リポジトリ
-# でないと無料枠で使えず、QEMUエミュレーションでのビルドは cargo build /
-# npm install が極端に遅くなるため作らない)。
+# 出すのは linux/amd64 と linux/arm64(arm系のNASやRaspberry Piでも動かせるように)。
 #
-# arm64が必要になったら、QEMUではなくRustのクロスコンパイル
-# (`--target aarch64-unknown-linux-gnu`)でamd64ランナーからバイナリを作る方が速い。
+# 重い部分はエミュレーションしない。Rustはクロスコンパイル(Dockerfileのbuilderステージが
+# BUILDPLATFORMで走り、--target で対象アーキのバイナリを出す)、Claude CodeのCLIは
+# 対象アーキのパッケージを取り出すだけ。QEMUが要るのは実行ステージの apt-get だけで、
+# 入れるのは3パッケージなので数十秒で済む。
+#
+# 公開リポジトリなので、標準ランナーの実行時間も公開パッケージのストレージも無料。
 name: build-and-push-image
 
 on:
@@ -21,7 +22,7 @@ on:
   # 手動実行(Actionsタブの "Run workflow")
   workflow_dispatch:
 
-# 同じrefへの連続pushでは古い実行を打ち切る(無料枠の節約)
+# 同じrefへの連続pushでは古い実行を打ち切る(後から出た結果だけが要るため)
 concurrency:
   group: build-and-push-image-${{ github.ref }}
   cancel-in-progress: true
@@ -37,6 +38,13 @@ jobs:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v7
 
+      # 実行ステージの apt-get を arm64 で走らせるために要る(ビルド本体はクロスなので、
+      # ここでエミュレーションするのは3パッケージのインストールだけ)
+      - name: QEMUをセットアップ
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
       - name: Buildxをセットアップ
         uses: docker/setup-buildx-action@v4
 
@@ -50,7 +58,7 @@ jobs:
       # タグ:
       #   latest        … mainへのpush時(デプロイ先が通常追いかけるタグ)
       #   sha-<短縮SHA> … 毎回付ける固定タグ(どのコミットが動いているか後から特定できる)
-      #                   ただし**残るのは最新の 1 版だけ**(下の削除ステップ参照)
+      #                   ただし残るのは直近の1回ぶんだけ(下の削除ステップ参照)
       #   v1.2.3        … `v*` タグをpushした場合のみ
       - name: イメージのタグ・ラベルを決める
         id: meta
@@ -66,35 +74,32 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
-          # 単一アーキテクチャなので attestation(provenance/sbom)は付けない
+          # attestation(provenance/sbom)は付けない —— タグの下に別のマニフェストが増え、
+          # GHCRの一覧で「どれが本体か」が読みにくくなる
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 依存クレートのビルド(Dockerfileの空main.rsのレイヤー)と
-          # npm install -g @anthropic-ai/claude-code のレイヤーを実行間で使い回す。
-          # Cargo.toml / Cargo.lock を変えなければ、毎回のビルドは自前のクレートだけになる
+          # 依存クレートのビルド(Dockerfileの空main.rsのレイヤー)を実行間で使い回す。
+          # Cargo.toml / Cargo.lock を変えなければ、毎回のビルドは自前のクレートだけになる。
+          # アーキごとに別のキャッシュとして載る
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 古いイメージを消して最新の 1 つだけ残す。
+      # 古いイメージを消して直近の1回ぶんだけ残す。
       #
       # `latest` を付け替えても前の版は `sha-` タグ付きで残り続けるため、放っておくと
-      # push のたびに積み上がる。一覧が読めなくなるのと、どれが生きているか分からなく
-      # なるのを防ぐための掃除。
+      # push のたびに積み上がる。公開パッケージなのでストレージは無料だが、版が積み上がると
+      # 一覧が読めなくなり、どれが生きているか分からなくなる。
       #
-      # ドキュメント上は非公開リポジトリの GHCR ストレージに 500MB の枠があり、超えると
-      # (支払い方法が無い場合)push がブロックされる、とされている。**ただし実測では、
-      # 非公開パッケージ合計 718MB の状態でも課金にも遮断にもなっていない**
-      # (2026-08 時点。課金 API に packages の行が一度も出ない)。
-      # 枠の話を当てにせず、積み上がりを止めること自体を目的にしている。
+      # 残す数が3なのはマルチアーキだから。1回のpushで
+      # 「マニフェストリスト(タグが付く) + amd64 + arm64(どちらもタグ無し)」の3版ができ、
+      # 3未満にすると今のイメージの中身まで消えてpullが壊れる。
+      # 1世代前も残したいなら6に上げる(3版 × 2世代)。
       #
-      # **ロールバック用の版も消える。** タグを指定して古い版に戻す運用はできなくなるので、
-      # 1 世代前を残したくなったら min-versions-to-keep を 2 に上げる。
-      #
-      # **失敗しても握りつぶさない**（continue-on-error を付けない）。消せていないのに
-      # 成功に見えると、枠が埋まって push が止まる日まで気づけないため。
+      # 失敗しても握りつぶさない(continue-on-error を付けない)。消せていないのに
+      # 成功に見えると、積み上がりに気づけないため。
       # GITHUB_TOKEN で権限が足りない場合は、delete:packages + read:packages を持つ PAT を
       # シークレット GHCR_CLEANUP_TOKEN に入れれば、そちらが使われる。
       - name: 古いイメージを削除して最新版だけ残す
@@ -102,5 +107,5 @@ jobs:
         with:
           package-name: ${{ github.event.repository.name }}
           package-type: container
-          min-versions-to-keep: 1
+          min-versions-to-keep: 3
           token: ${{ secrets.GHCR_CLEANUP_TOKEN || secrets.GITHUB_TOKEN }}

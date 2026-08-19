@@ -59,7 +59,7 @@ pihole-monitor/
   docker-compose.standalone.example.yml # .env・クローンを置けない環境向けの雛形（値の直書き）
   .github/
     workflows/
-      build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64のみ）
+      build-and-push-image.yml # イメージをビルドしてGHCRへpush（linux/amd64 + linux/arm64）
   data/               # SQLiteのDBと設定（トークン・CLIのホーム）が入る（コンテナ外に永続化・起動時に自動生成）
     monitor.db        # 確認済みドメイン（reviewed_domains）と画面からの設定（settings）
     state/settings.db # Claudeのトークン（0600。読むのはこのアプリだけ）
@@ -852,7 +852,7 @@ HTML骨格・CSS・JSをファイルごとに分離。vanilla JS + fetch APIで�
 ## 起動方法
 
 ```bash
-# デプロイ先：GHCRのイメージをpullして起動（初回のみ docker login ghcr.io が必要）
+# デプロイ先：GHCRのイメージをpullして起動（公開パッケージなので認証は要らない）
 docker compose pull && docker compose up -d
 
 # 手元のソースから作り直す場合
@@ -905,12 +905,17 @@ uidを1000以外にできる設計なので、**`/etc/passwd`に載っていな�
 
 - **ワークフロー**: `.github/workflows/build-and-push-image.yml`
   - トリガー: `main`へのpush（`**.md`・`.gitignore`のみの変更は除外）/ `v*` gitタグ / 手動実行
-  - `concurrency`で同一refの古い実行を打ち切る（非公開リポジトリのためActions実行時間・GHCRストレージが無料枠を消費する）
+  - `concurrency`で同一refの古い実行を打ち切る（後から出た結果だけが要るため）
 - **公開先**: `ghcr.io/rtcode337/pihole-monitor`
   - タグ: `latest`（mainへのpush時）/ `sha-<短縮SHA>`（毎回）/ `v*` gitタグ名
   - **GHCRに残るのは最新の1版だけ**。push後に古い版を削除している（GHCRのストレージ枠はアカウント全体で共有で、超えると課金ではなくpushがブロックされる）。そのぶん過去のイメージには戻せない。世代を残すならworkflowの`min-versions-to-keep`を上げる
-  - **`linux/amd64`のみ**。arm64のネイティブランナーは公開リポジトリでないと無料枠で使えず、QEMUエミュレーションでは`cargo build`が極端に遅くなるため作らない。**arm64が必要になったらQEMUではなくRustのクロスコンパイル**（`--target aarch64-unknown-linux-gnu`）でamd64ランナーからバイナリを作るほうが速い
-  - リポジトリが非公開＝パッケージも非公開。デプロイ先では`read:packages`スコープのPATで`docker login ghcr.io`が必要
+  - **`linux/amd64` と `linux/arm64`**（arm系のNASやRaspberry Piでも動かせるように）。
+    **重い部分はエミュレーションしない** —— Rustは**クロスコンパイル**（builderステージが`--platform=$BUILDPLATFORM`で走り、`--target`で対象アーキのバイナリを出す）、CLIは対象アーキのパッケージを取り出すだけ。
+    QEMUが要るのは実行ステージの`apt-get`だけ（3パッケージ）。
+    **クロスには対象の libc のヘッダも要る**（`libc6-dev-<arch>-cross`）—— `gcc-<arch>-linux-gnu`だけだとホストの`/usr/include`を読んで`bits/libc-header-start.h: No such file`で落ちる（rusqliteとringがCをビルドするため実際に踏んだ）。
+    **アーキが同じときはクロスの支度をしない**（`BUILDARCH`と比較）
+  - **公開リポジトリなので、標準ランナーの実行時間も公開パッケージのストレージも無料。** デプロイ先での`docker login`も要らない
+  - **`min-versions-to-keep`は3**。マルチアーキでは1回のpushで「マニフェストリスト + amd64 + arm64」の3版ができるので、3未満にすると**いま配っているイメージの中身まで消えてpullが壊れる**
 - **`docker-compose.yml`**: `image`は`${PIHOLE_MONITOR_IMAGE:-ghcr.io/rtcode337/pihole-monitor:latest}`。`.env`の`PIHOLE_MONITOR_IMAGE`で特定タグへ固定できる（**ただしGHCRには最新の1版しか残らないので、過去の版へは戻せない**）。`build: .`は手元ビルド用に残してある。サービスは2つで、`pihole-monitor-init`（所有者合わせ）と本体（**CLIは本体のイメージに同梱**なのでサイドカーは要らない）。**initも本体と同じイメージ・同じタグを参照しているので、pullもビルドも増えない**（2つ目はキャッシュに当たる）
 - **`docker-compose.standalone.example.yml`**: `.env`もクローンも置けない環境（NASのコンテナマネージャー等、管理画面にYAMLを貼り付けるタイプ）向けの単体定義。違いは「`${...}`・`env_file`を使わず値を直書き」「`build:`を持たない」「bindマウントを絶対パスで書く」の3点。編集する値はすべて冒頭の「ここだけ編集」（データの置き場・Pi-holeの接続設定・実行ユーザー）にまとめてある。`chown`先と`user:`はどちらも`x-run-as`アンカーを参照させて、片方だけ直す事故を防いでいる。**`docker-compose.yml`側の設定を変えたらstandalone側にも同じ変更を反映すること**（値の直書きぶん古くなりやすい）
   - **リポジトリに置くのは`.example`の付いた雛形だけ。** 実値を入れてコピーした`docker-compose.standalone.yml`は`.gitignore`してある（`.env.example`と`.env`の関係と同じ。**この形式は値を直書きするので、追記した瞬間にPi-holeのパスワードがコミット対象に入る**）

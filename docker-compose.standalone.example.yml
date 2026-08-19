@@ -18,9 +18,7 @@
 #   2. その内容を管理画面に貼り付けて起動する
 #   3. http://<ホスト>:7060/ を開く
 #
-# 非公開リポジトリのためGHCRのパッケージも非公開。pullする前に、そのホストで
-# `read:packages` スコープのPersonal Access Tokenを使って
-# `docker login ghcr.io -u <GitHubユーザー名>` を済ませておくこと。
+# パッケージは公開なので、pullに認証は要らない。
 #
 # 障害時は :latest ではなく :sha-xxxxxxx を指定すれば任意の時点のイメージに戻せる。
 #

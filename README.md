@@ -33,16 +33,10 @@ cp .env.example .env
 ## 起動
 
 イメージは GitHub Actions が main への push でビルドし、GHCR
-（`ghcr.io/rtcode337/pihole-monitor`）へ公開している（`linux/amd64` のみ）。
-デプロイ先ではソースからビルドせず、これを pull して動かす。
-
-リポジトリが非公開なのでパッケージも非公開。初回だけデプロイ先で `docker login` が要る
-（GitHubで `read:packages` スコープのPersonal Access Token（classic）を発行して使う）。
+（`ghcr.io/rtcode337/pihole-monitor`）へ公開している（`linux/amd64` と `linux/arm64`）。
+デプロイ先ではソースからビルドせず、これを pull して動かす。**認証は要らない**（公開パッケージ）。
 
 ```bash
-# デプロイ先で1回だけ
-echo "<Personal Access Token>" | docker login ghcr.io -u <GitHubユーザー名> --password-stdin
-
 # 初回・更新とも共通
 docker compose pull && docker compose up -d
 ```

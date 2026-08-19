@@ -4,8 +4,7 @@
 #
 #   docker compose pull && docker compose up -d
 #
-# 非公開リポジトリのためGHCRのパッケージも非公開。事前にそのホストで
-# `docker login ghcr.io`(read:packages 権限のPAT)が必要。README参照。
+# パッケージは公開なので、pullに認証は要らない。
 #
 # `.env` に PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-xxxxxxx を書けば
 # 特定のイメージを指定できる。
