@@ -65,15 +65,19 @@
 </div>
 
 <!-- 上段のタブ。2つの画面は材料も判定も違う ——
-     ブロック済みはPi-holeをその場で叩いた集計、監視は貯めた過去との突き合わせ -->
+     ブロック済みはPi-holeをその場で叩いた集計、監視は貯めた過去との突き合わせ。
+     ヘッダーのページ切り替えと同じくリンク（`#domains/<モード>`）にしてある ——
+     JSの変数だけで持っていた頃は、読み直すとブロック済みへ戻っていた -->
 <div class="modebar">
-  <button class="mode-btn active" id="mode-blocked" onclick="setMode('blocked', event)">ブロック済み</button>
-  <button class="mode-btn" id="mode-watch" onclick="setMode('watch', event)">未ブロックの監視</button>
+  <a class="mode-btn active" id="mode-blocked" href="#domains/blocked">ブロック済み</a>
+  <a class="mode-btn" id="mode-watch" href="#domains/watch">未ブロックの監視</a>
 </div>
 
-<!-- 監視モードのときだけ出す前置き。「どこまで見えているか」を必ず添える ——
-     貯まっていない時期に「0件」と出ると、平穏なのか材料が無いのか区別できない -->
-<div class="watch-context" id="watch-context" hidden></div>
+<!-- 一覧の前置き。「どこまで見えているか」を必ず添える ——
+     監視は、貯まっていない時期の「0件」を平穏だと読み違えないため。
+     ブロック済みは、件数（Pi-holeの集計）とアクセス元・期間（貯めたクエリ）で
+     出どころが違うため。中身はモードごとに app.js が組む -->
+<div class="list-context" id="list-context" hidden></div>
 
 <!-- 監視の基準日時。ネットワークの設定を変えた日に押す ——
      変える前の通信は別の環境の記録で、同じ画面に混ぜるとノイズにしかならない -->
@@ -164,6 +168,24 @@
     <!-- 走らせたコマンドも出す。何をした結果なのか分からないと読めない -->
     <div class="diag-command" id="diag-command" hidden></div>
     <pre class="diag-output" id="diag-output" hidden></pre>
+  </div>
+
+  <!-- 調べたものの控え。2つの一覧はどちらも「いま出ているもの」しか並べないので、
+       静かになったドメインのメモはここからしか読めない。長くなるので一番下に置く -->
+  <div class="settings-section">
+    <div class="detail-label">メモが残っているドメイン</div>
+    <div class="settings-note">
+      メモ・確認済み・調査結果が残っているドメインを、<strong>更新の新しい順に全件</strong>並べます。
+      一覧（ブロック済み・未ブロックの監視）は<strong>いま通信が出ているものしか出さない</strong>ので、
+      静かになったドメインの記録はここから読みます。
+    </div>
+    <div class="diag-row">
+      <button class="action-btn review-btn" id="notes-reload" onclick="loadNotes()">読み直す</button>
+      <span class="settings-status" id="notes-status"></span>
+    </div>
+    <div class="note-list" id="note-list"></div>
+    <!-- ページ送り。控えの下（読み終わった先に次への入口がある）。中身はJSが組む -->
+    <div class="note-nav" id="note-nav"></div>
   </div>
 
 </div><!-- /page-settings -->

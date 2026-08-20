@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
+use serde::Serialize;
 
 /// ドメイン1件についてこちらが持っている記録。
 ///
@@ -45,6 +46,53 @@ pub struct DomainProfile {
     pub replies: Vec<(String, i64)>,
     pub qtypes: Vec<(String, i64)>,
 }
+
+/// 記録が残っているドメイン1件(設定のページの「メモが残っているドメイン」に出す)。
+///
+/// [`DomainRecord`] と中身はほぼ同じだが、ドメイン名と更新時刻を持つのでそのまま並べられる。
+/// 2つの一覧(ブロック済み・監視)はどちらも「いま出ているもの」しか並べないため、
+/// 落ち着いたドメインのメモはここからしか辿れない。
+#[derive(Debug, Clone, Serialize)]
+pub struct NoteRow {
+    pub domain: String,
+    /// 最後に更新した時刻(RFC3339)
+    pub updated_at: String,
+    pub note: String,
+    pub reviewed: bool,
+    pub research: String,
+    pub researched_at: String,
+}
+
+/// ドメインごとの観測(ある範囲での件数・引いた端末・通信が起きていた期間)。
+///
+/// ブロック済みの一覧と監視の候補が同じ形を使う。 出どころ(Pi-holeの集計 /
+/// 貯めたクエリ)は違っても、画面に出す「誰が・いつからいつまで」は同じものなので、
+/// 組み立ても1か所にしてある。
+#[derive(Debug, Clone, Default)]
+pub struct DomainActivity {
+    pub count: i64,
+    /// そのうち Pi-hole が止めたぶん([`BLOCKED_STATUS_SQL`])。
+    /// 監視の一覧が「ブロック済み」の印を出すのに使う —— あちらはブロックの有無で
+    /// 絞っていないので、止められているドメインが混ざる。落とさずに印を付ける
+    /// (止められているのに端末が鳴らし続けているのは、それ自体が見たい情報)
+    pub blocked: i64,
+    /// 引いた端末(件数の多い順)
+    pub clients: Vec<String>,
+    /// 範囲の中で最初/最後に引かれた時刻(unix秒)。1件も無ければ 0
+    pub first_ts: f64,
+    pub last_ts: f64,
+}
+
+/// Pi-hole が「止めた」ことを表す status の条件(SQL の断片)。
+///
+/// 素通りした側(`FORWARDED` / `CACHE` / `CACHE_STALE` / `IN_PROGRESS` …)を数えないための
+/// もので、ブロック済みの一覧の「アクセス元」と「期間」がこれで決まる。
+/// 接尾辞つき(`GRAVITY_CNAME` = CNAME の先がブロックリストに載っていた、
+/// `DENYLIST_CNAME` …)も拾いたいので前方一致で書く。
+/// `SPECIAL_DOMAIN` は Pi-hole 自身の特別扱い(iCloud Private Relay の
+/// `mask.icloud.com` など)で、これもブロックの一種。
+const BLOCKED_STATUS_SQL: &str = "(status LIKE 'GRAVITY%' OR status LIKE 'DENYLIST%' \
+     OR status LIKE 'REGEX%' OR status LIKE 'EXTERNAL_BLOCKED%' OR status = 'SPECIAL_DOMAIN')";
 
 /// 取り込みの状況(件数と、生のクエリの一番古い時刻)。
 ///
@@ -196,6 +244,36 @@ impl Db {
 
     /// 確認済み / 未確認をまとめて切り替える(1件でも同じ経路)。
     ///
+    /// 記録の残っているドメインを、更新の新しい順に1ページぶん返す(件数の総数も一緒に)。
+    ///
+    /// 出す対象は間引かない(一覧に出ているかどうかは見ない)。 設定のページはここを
+    /// 「調べたものの控え」として出すので、絞ると控えの意味が無くなる ——
+    /// 代わりにページで切る。調査結果は1件で1KBを超えることがあり、全件を1回で返すと
+    /// 設定のページを開くたびに数百KBを運ぶことになる。
+    /// 並べ替えはSQLに任せる(`updated_at` は同じ書式のRFC3339なので文字列順で並ぶ)。
+    pub async fn notes_page(&self, offset: i64, limit: i64) -> Result<(Vec<NoteRow>, i64)> {
+        self.with_conn(move |conn| {
+            // 総数は別に数える。 ページの中身だけでは「あと何件あるか」が言えない
+            let total: i64 = conn.query_row("SELECT COUNT(*) FROM domain_notes", [], |r| r.get(0))?;
+            let mut stmt = conn.prepare(
+                "SELECT domain, updated_at, note, reviewed, research, researched_at
+                   FROM domain_notes ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = stmt.query_map([limit, offset], |row| {
+                Ok(NoteRow {
+                    domain: row.get(0)?,
+                    updated_at: row.get(1)?,
+                    note: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    reviewed: row.get::<_, i64>(3)? != 0,
+                    research: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    researched_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                })
+            })?;
+            Ok((rows.collect::<rusqlite::Result<Vec<_>>>()?, total))
+        })
+        .await
+    }
+
     /// `note` は渡したときだけ書く。 チェックした複数件を確認済みにするときに、
     /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
     /// 未確認に戻してもメモは消さない —— メモと確認済みは別の話なので、
@@ -597,21 +675,38 @@ impl Db {
         .await
     }
 
-    /// ドメインごとの、`since` 以降の件数と引いたクライアント。
+    /// ドメインごとの、`since` 以降の件数・引いたクライアント・通信が起きていた期間。
+    ///
     /// どの端末が引いたかは判断材料そのもの(PCが引くのと家電が引くのでは意味が違う)。
+    /// 期間(`first_ts` / `last_ts`)も同じ問い合わせで取る —— 「いつからいつまで
+    /// 鳴っていたのか」は件数だけでは分からず(1,400回が1時間に集中したのか
+    /// 2日かけて散ったのかで意味が違う)、ドメインごとに引き直すと数百回になる。
+    ///
+    /// `blocked_only` を立てると、Pi-hole が止めたクエリだけを数える
+    /// ([`BLOCKED_STATUS_SQL`] を参照)。ブロック済みの一覧が使う ——
+    /// 同じドメインが通ったり止まったりする(端末ごとの設定・CNAME)ので、
+    /// 素通りしたぶんまで混ぜると「止められた通信の期間」ではなくなる。
     pub async fn domain_activity_since(
         &self,
         since: f64,
         domains: Vec<String>,
-    ) -> Result<HashMap<String, (i64, Vec<String>)>> {
+        blocked_only: bool,
+    ) -> Result<HashMap<String, DomainActivity>> {
         if domains.is_empty() {
             return Ok(HashMap::new());
         }
         self.with_conn(move |conn| {
             let holes = vec!["?"; domains.len()].join(",");
+            let blocked = if blocked_only {
+                format!("AND {BLOCKED_STATUS_SQL}")
+            } else {
+                String::new()
+            };
             let sql = format!(
-                "SELECT domain, client, COUNT(*) FROM dns_queries
-                  WHERE ts >= ?1 AND domain IN ({holes})
+                "SELECT domain, client, COUNT(*), MIN(ts), MAX(ts),
+                        SUM(CASE WHEN {BLOCKED_STATUS_SQL} THEN 1 ELSE 0 END)
+                   FROM dns_queries
+                  WHERE ts >= ?1 AND domain IN ({holes}) {blocked}
                   GROUP BY domain, client"
             );
             let mut stmt = conn.prepare(&sql)?;
@@ -625,15 +720,28 @@ impl Db {
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, i64>(2)?,
+                    r.get::<_, f64>(3)?,
+                    r.get::<_, f64>(4)?,
+                    r.get::<_, i64>(5)?,
                 ))
             })?;
-            let mut out: HashMap<String, (i64, Vec<String>)> = HashMap::new();
+            // 端末は件数の多い順に並べる。 SQLの列挙順のままだと、同じ一覧を
+            // 読み直すたびに並びが変わって「増えた端末」に気づけない
+            let mut clients: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+            let mut out: HashMap<String, DomainActivity> = HashMap::new();
             for row in rows {
-                let (domain, client, n) = row?;
-                let e = out.entry(domain).or_insert((0, Vec::new()));
-                e.0 += n;
-                if !e.1.contains(&client) {
-                    e.1.push(client);
+                let (domain, client, n, first, last, blocked) = row?;
+                let e = out.entry(domain.clone()).or_default();
+                e.count += n;
+                e.blocked += blocked;
+                e.first_ts = if e.first_ts == 0.0 { first } else { e.first_ts.min(first) };
+                e.last_ts = e.last_ts.max(last);
+                clients.entry(domain).or_default().push((client, n));
+            }
+            for (domain, mut list) in clients {
+                list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                if let Some(e) = out.get_mut(&domain) {
+                    e.clients = list.into_iter().map(|(c, _)| c).collect();
                 }
             }
             Ok(out)

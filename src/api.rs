@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -60,6 +60,10 @@ pub fn router() -> Router<AppState> {
         // 設定画面の疎通確認(ping / 経路)。一覧の判定には関わらない ——
         // 名前を引いた記録だけでは「その先に届くのか」が分からないので、手で叩ける口を置く
         .route("/api/diag", post(diag))
+        // メモ・確認済みが残っているドメインの控え。設定のページが読む ——
+        // 2つの一覧はどちらも「いま出ているもの」しか並べないので、
+        // 落ち着いたドメインの記録はここからしか辿れない
+        .route("/api/notes", get(notes_get))
         // 画面から決める設定。環境変数では渡せない —— 入口が2つあると
         // 「どちらの値が効いているのか」を画面が説明し続けることになる
         .route("/api/settings", get(settings_get).post(settings_post))
@@ -79,6 +83,13 @@ struct DomainEntry {
     /// 「詳しく調べる」の結果。メモとは別（詳細画面でメモの上に出す）
     research: String,
     researched_at: String,
+    /// ブロックされた通信を出した端末（件数の多い順）。出どころは貯めたクエリで、
+    /// 件数（Pi-hole の集計）とは範囲が違う —— 画面が前置きでそう断っている
+    clients: Vec<String>,
+    /// ブロックされた通信が起きていた期間（unix秒。分からなければ 0）。
+    /// 監視の候補（`WatchItem`）と同じ名前・同じ意味にしてある
+    active_from: i64,
+    active_to: i64,
 }
 
 #[derive(Deserialize)]
@@ -438,7 +449,13 @@ async fn domains(State(state): State<AppState>) -> Response {
         Err(e) => return internal_error(e, "ドメインの記録を読み出せない"),
     };
 
-    let blocked_names: HashSet<&String> = blocked.keys().collect();
+    // 出すのは Pi-hole の集計に載っているものだけ。 かつては記録(メモ・確認済み)の
+    // あるドメインを「件数0」として足していたが、監視の側で調べたメモもここに現れる
+    // ようになって破綻した —— 監視で「詳しく調べる」を押した `chatgpt.com` が、
+    // 一度も止められていないのに「ブロック済み」の一覧に並ぶ(実測: 手元の記録 1,466 件が
+    // 全部素通り)。いま止められていないものは、この一覧に置く理由が無い。
+    // 一覧から外れたメモは消えていない —— 設定のページの「メモが残っているドメイン」で
+    // 全部読める(`/api/notes`)
     let mut entries: Vec<DomainEntry> = blocked
         .iter()
         .map(|(domain, count)| {
@@ -450,22 +467,32 @@ async fn domains(State(state): State<AppState>) -> Response {
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
+                clients: Vec::new(),
+                active_from: 0,
+                active_to: 0,
             }
         })
         .collect();
 
-    // 直近のブロック済みクエリに出てこない記録も、件数0として一覧に残す
-    // (確認済みだけでなくメモだけの行も残す —— 調べた内容を画面から消さないため)
-    for (domain, record) in &records {
-        if !blocked_names.contains(domain) {
-            entries.push(DomainEntry {
-                domain: domain.clone(),
-                count: 0,
-                reviewed: record.reviewed,
-                note: record.note.clone(),
-                research: record.research.clone(),
-                researched_at: record.researched_at.clone(),
-            });
+    // アクセス元と期間は貯めたクエリから足す。 Pi-hole の集計は
+    // 「ドメインと件数」しか返さないので、誰が引いたのかも、いつからいつまで
+    // 鳴っていたのかもあちらからは分からない。
+    //
+    // 数えるのは止められたクエリだけ(`blocked_only`)。 同じドメインが通ったり
+    // 止まったりする(端末ごとの設定・CNAME 経由)ので、素通りしたぶんまで混ぜると
+    // 「ブロックされた通信の期間」ではなくなる。
+    // 範囲は手元に残っている全部(`since` = 0)—— 保持期間より前は分からないので、
+    // どこまで見えているかは画面が前置きで断る
+    let names: Vec<String> = entries.iter().map(|e| e.domain.clone()).collect();
+    let activity = match state.db.domain_activity_since(0.0, names, true).await {
+        Ok(activity) => activity,
+        Err(e) => return internal_error(e, "ブロックされた通信の記録を読み出せない"),
+    };
+    for entry in &mut entries {
+        if let Some(seen) = activity.get(&entry.domain) {
+            entry.clients = seen.clients.clone();
+            entry.active_from = seen.first_ts as i64;
+            entry.active_to = seen.last_ts as i64;
         }
     }
 
@@ -478,7 +505,65 @@ async fn domains(State(state): State<AppState>) -> Response {
             .then_with(|| a.domain.cmp(&b.domain))
     });
 
-    Json(entries).into_response()
+    // 監視(`/api/watch`)と同じく、一覧そのものではなく「一覧 + どこまで見えているか」を返す。
+    // アクセス元と期間の出どころ(貯めたクエリ)は件数(Pi-hole の集計)と範囲が違うので、
+    // 画面がそれを断れるだけの材料をここで渡す
+    let stats = match state.db.ingest_stats().await {
+        Ok(stats) => stats,
+        Err(e) => return internal_error(e, "取り込みの状況を読み出せない"),
+    };
+    Json(json!({
+        // 理由の札と同じく、ドメインで絞り込んだクエリログへ飛ばすために渡す
+        // (空なら画面はリンクにしない)
+        "pihole_url": state.pihole_web_url,
+        // 貯めたクエリの一番古い時刻(unix秒)。アクセス元と期間が見えている範囲そのもの
+        "data_since": stats.oldest_ts.map(|ts| ts as i64),
+        // サーバのいま(unix秒)。画面が「まだ続いている通信か」を判定するのに使う ——
+        // 画面の時計で測ると、端末の時計がずれているだけで常に続いて見えたり、
+        // 逆に一度も続かなくなる(記録の時刻は Pi-hole 側の時計で付いている)
+        "now": unix_now() as i64,
+        "items": entries,
+    }))
+    .into_response()
+}
+
+/// 控えの1ページの件数(画面もこの数で区切る)。
+const NOTES_LIMIT_DEFAULT: i64 = 50;
+
+/// 1回に返す上限。青天井にしない —— 調査結果は1件で1KBを超えることがあり、
+/// 大きな値を渡されると1リクエストで数MBを運ぶことになる。
+const NOTES_LIMIT_MAX: i64 = 200;
+
+#[derive(Deserialize)]
+struct NotesQuery {
+    /// 何件目から(既定は先頭)
+    #[serde(default)]
+    offset: i64,
+    /// 1ページの件数(既定 [`NOTES_LIMIT_DEFAULT`])
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// メモ・確認済みの残っているドメインを1ページぶん返す(設定のページの控え)。
+///
+/// 一覧の口(`/api/domains` / `/api/watch`)と違って Pi-hole を叩かない ——
+/// 中身は手元の記録そのもので、いま通信が出ているかどうかとは関係が無い。
+///
+/// 範囲の外を渡されても断らずに丸める。 押した人が組み立てる値ではなく画面が
+/// 送るものなので、400 を返しても打つ手が無い(控えが空で出るだけになる)。
+async fn notes_get(State(state): State<AppState>, Query(q): Query<NotesQuery>) -> Response {
+    let offset = q.offset.max(0);
+    let limit = q.limit.unwrap_or(NOTES_LIMIT_DEFAULT).clamp(1, NOTES_LIMIT_MAX);
+    match state.db.notes_page(offset, limit).await {
+        Ok((items, total)) => Json(json!({
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }))
+        .into_response(),
+        Err(e) => internal_error(e, "メモの一覧を読み出せない"),
+    }
 }
 
 /// 確認済みにする(1件でもまとめてでも)。`note` を渡したときだけメモも保存する。

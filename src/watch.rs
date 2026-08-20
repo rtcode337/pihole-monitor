@@ -204,7 +204,10 @@ fn methods(backfill_days: i64) -> Vec<Method> {
             label: "NXDOMAIN多発",
             catches: "生成ドメイン(DGA)、死んだ接続先、設定ミス",
             how: format!("存在しない名前として{NXDOMAIN_MIN}回以上返っている"),
-            caveat: "逆引き(*.in-addr.arpa / *.ip6.arpa)は必ずNXDOMAINになるので除いてある。\
+            caveat: "Pi-hole 自身がブロックのためにNXDOMAINを返すことがあり\
+                     (iCloud Private Relay の mask.icloud.com など)、それも数に入る ——\
+                     行の「ブロック済み」の印で見分けられる。\
+                     逆引き(*.in-addr.arpa / *.ip6.arpa)は必ずNXDOMAINになるので除いてある。\
                      生のクエリが残っている範囲でしか見えない"
                 .to_string(),
         },
@@ -270,10 +273,23 @@ pub struct WatchItem {
     pub research: String,
     pub researched_at: String,
     pub reasons: Vec<Reason>,
-    /// この窓で引いた端末(分かる範囲)
+    /// この窓で引いた端末(分かる範囲。件数の多い順)
     pub clients: Vec<String>,
     /// はじめて見た時刻(unix秒)。遡り取り込みで埋めた行は日単位の粒度
     pub first_seen: i64,
+    /// この窓で実際に通信が起きていた期間(unix秒。1件も無ければ 0)。
+    /// 件数だけでは「1時間に集中したのか、2日かけて散ったのか」が分からない
+    pub active_from: i64,
+    pub active_to: i64,
+    /// `count` のうち Pi-hole が止めたぶん。画面が「ブロック済み」の印を出す。
+    ///
+    /// この一覧はブロックの有無で絞っていない(名前を引いた記録すべてを見る)ので、
+    /// 止められているドメインも挙がる —— 実際 `mask.icloud.com` は Pi-hole が
+    /// `SPECIAL_DOMAIN` で止めて NXDOMAIN を返しており、その NXDOMAIN が
+    /// 「多発」に当たって候補になる。落とさずに印を付けるのは、
+    /// 止められているのに端末が鳴らし続けていること自体が見たい情報だから
+    /// (ブロックが効いていても、その端末は接続先を諦めていない)。
+    pub blocked_count: i64,
 }
 
 /// 画面に渡す一式。数字だけでなく「どこまで見えているか」も返す ——
@@ -292,6 +308,10 @@ pub struct WatchResult {
     /// 見ている範囲の終わり(unix秒 = いま)。画面が持つ時刻を使わない ——
     /// 理由のリンクに載せる範囲は、判定に使った範囲とそろっている必要がある
     pub until: i64,
+    /// サーバのいま(unix秒)。画面が「まだ続いている通信か」を判定するのに使う。
+    /// `until` と同じ値だが名前で役割を分ける —— あちらは「判定に使った範囲の終わり」で、
+    /// 窓の決め方を変えれば別の値になりうる。ブロック済みの一覧も同じ名前で返す
+    pub now: i64,
     /// 基準日時が遡り取り込みの範囲より古くて丸めたか。
     /// 丸めたことは画面に出す —— 黙って狭めると「設定した日から見ているつもり」で
     /// 実際は違う、という食い違いが起きる
@@ -402,24 +422,28 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
 
     // 件数と端末はまとめて1回で引く(ドメインごとに問い合わせない)
     let domains: Vec<String> = reasons.keys().cloned().collect();
-    let activity = db.domain_activity_since(since_ts, domains).await?;
+    // 素通りしたぶんも数える(この一覧はブロックの有無で絞っていない)
+    let activity = db.domain_activity_since(since_ts, domains, false).await?;
     let records = db.records().await?;
 
     let mut items: Vec<WatchItem> = reasons
         .into_iter()
         .filter(|(domain, _)| !is_excluded(domain))
         .map(|(domain, reasons)| {
-            let (count, clients) = activity.get(&domain).cloned().unwrap_or((0, Vec::new()));
+            let seen = activity.get(&domain).cloned().unwrap_or_default();
             let record = records.get(&domain);
             WatchItem {
                 first_seen: first_seen.get(&domain).copied().unwrap_or(0),
-                count,
+                active_from: seen.first_ts as i64,
+                active_to: seen.last_ts as i64,
+                blocked_count: seen.blocked,
+                count: seen.count,
                 reviewed: record.map(|r| r.reviewed).unwrap_or(false),
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
                 reasons,
-                clients,
+                clients: seen.clients,
                 domain,
             }
         })
@@ -449,6 +473,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
         baseline,
         since: since_secs,
         until: now as i64,
+        now: now as i64,
         baseline_clamped,
         data_hours,
         total_domains: stats.domains,

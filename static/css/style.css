@@ -227,6 +227,7 @@ header h1 span { color: var(--c-text); }
 
 .mode-btn {
   padding: 8px 16px;
+  text-decoration: none;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
@@ -249,8 +250,9 @@ header h1 span { color: var(--c-text); }
   background: var(--c-bg);
 }
 
-/* 監視モードの前置き（どこまで見えているか）。0件の意味を読み違えさせない */
-.watch-context {
+/* 一覧の前置き（どこまで見えているか）。両方のモードで出す ——
+   監視は0件の意味を、ブロック済みは数字の出どころの違いを読み違えさせない */
+.list-context {
   padding: 10px 14px;
   margin: 0 32px 12px;
   border: 1px solid var(--c-border);
@@ -358,6 +360,53 @@ a.reason-link:hover {
   font-size: 10px;
   color: var(--c-dim);
 }
+
+/* 観測した事実（期間・引いた端末・Pi-holeのクエリログへの入口）。
+   理由の札（色で手を見分ける）とは別の行にする —— 同じ行に混ぜると、
+   「なぜ挙がったか」と「いつ・誰が」が同じ重さの札に見える */
+.activity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  margin-top: 4px;
+  align-items: center;
+}
+
+/* 通信が起きていた期間。数字が並ぶので等幅にして、桁の位置をそろえる */
+.period {
+  font-size: 10px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* まだ続いている通信の終わりの時刻。太字だけでなく本文の色まで上げる ——
+   10px の字は太らせても薄い色のままだと、並べたときに差が見えない */
+.period-now {
+  color: var(--c-text-strong);
+  font-weight: 700;
+}
+
+/* Pi-hole が止めていることの印。理由の札（なぜ挙がったか）とは別の話なので、
+   手の色は使わず、面を持たない枠だけにする —— 同じ行で色を争わせない。
+   目立たせる対象ではなく、「なぜ未ブロックの一覧に居るのか」の答えとして読めればよい */
+.blocked-mark {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px dashed var(--c-border-strong);
+  color: var(--c-muted);
+}
+
+/* Pi-hole のクエリログへの入口。理由の札と違って手の色を持たないので、
+   ここは素直にリンクの色にする */
+.pihole-link {
+  font-size: 10px;
+  color: var(--c-blue);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+}
+
+.pihole-link:hover { filter: brightness(1.25); }
 
 /* 「どうやって候補を選んでいるか」。畳んでおく ——
    普段は前置きだけ読めばよく、腑に落ちないときに開くもの */
@@ -1111,6 +1160,87 @@ a.reason-link:hover {
   white-space: pre;
 }
 
+/* メモが残っているドメインの控え。一覧の行と同じ見た目にはしない ——
+   ここは操作する場所ではなく読む場所で、1行に何十件も並べるより
+   ドメイン・状態・時刻・本文を素直に積むほうが探しやすい */
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 控えは何百件にもなりうる。 設定のページの他の項目まで押し流さないよう、
+     この中でスクロールさせる（他の設定へ戻るのにページ全体を遡らせない） */
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.note-item {
+  padding: 8px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg);
+}
+
+.note-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* コピーのボタンを絶対配置で載せるので、基準をここに置く（一覧の .domain-name と同じ） */
+.note-domain {
+  font-size: 12px;
+  color: var(--c-text);
+  word-break: break-all;
+  position: relative;
+  display: inline-block;
+}
+
+.note-item:hover .copy-btn { opacity: 1; }
+
+.note-when {
+  font-size: 10px;
+  color: var(--c-dim);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.domain-note.is-empty { color: var(--c-dim); }
+
+/* 調査結果は畳んでおく。 1件で何十行にもなるので、開いたまま並べると控えを見渡せない */
+.note-research { margin-top: 6px; }
+
+.note-research summary {
+  font-size: 11px;
+  color: var(--c-muted);
+  cursor: pointer;
+}
+
+.note-research .detail-research { margin: 6px 0 0; }
+
+/* ページ送り。控えの下に置く。件数の表示（何件目/総数）は「読み直す」の隣の
+   ステータスが持つので、ここは前後の入口とページ番号だけ */
+.note-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.note-nav:empty { display: none; }
+
+.note-page {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-note {
+  font-size: 11px;
+  color: var(--c-dim);
+  padding: 8px 0;
+}
+
 /* ---- 下に引っ張って更新 ---- */
 
 /* 画面の上端に固定して置く。 引っ張った量だけ JS が降ろす（transform）ので、
@@ -1220,7 +1350,7 @@ a.reason-link:hover {
   .stat-value { font-size: 22px; }
   .toolbar { padding: 0 14px; }
   .modebar { padding: 0 14px; }
-  .watch-context { margin: 0 14px 12px; }
+  .list-context { margin: 0 14px 12px; }
   .watch-baseline { padding: 0 14px; }
   .select-bar { padding: 0 14px; }
   .domain-list { padding: 0 14px 24px; }

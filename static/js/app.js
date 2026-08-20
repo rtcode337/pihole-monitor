@@ -11,8 +11,10 @@ let currentFilter = 'new';
 // 同じ一覧の変数に入れるので、フィルター・選択・まとめて聞く・詳細モーダルは
 // どちらのモードでもそのまま動く（行が持つ項目が増えるだけ）
 let currentMode = 'blocked';
-// 監視モードの前置き（どこまで見えているか）。/api/watch の応答から作る
-let watchMeta = null;
+// いま出している一覧の付帯情報（`/api/domains`・`/api/watch` の応答の、items 以外の全部）。
+// 前置きの文と Pi-hole のクエリログへのリンクをここから組む —— どちらのモードでも
+// 「一覧そのもの」と「どこまで見えているか」を1つの応答で返してもらう
+let listMeta = null;
 let pendingDomain = null;
 let answerPendingDomain = null;
 // /api/ai の応答。相手の一覧・選択・繋がらない理由が入る（取れなければ null）
@@ -80,19 +82,13 @@ function shortTime(iso) {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+// unix秒 → 「8/19 00:12」。書式は shortTime に集約する（同じ画面で表記を割らない）
+function shortTimeAt(unixSecs) {
+  return shortTime(new Date(unixSecs * 1000).toISOString());
 }
 
-function setMode(mode, event) {
-  if (currentMode === mode) return;
-  currentMode = mode;
-  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-  if (event) event.target.classList.add('active');
-  // モードを跨いだ選択は残さない。 別の一覧の行を選んだまま「選択を確認済みにする」を
-  // 押すと、見えていないものを確認済みにすることになる
-  selectedDomains.clear();
-  loadDomains();
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 async function loadDomains() {
@@ -104,14 +100,9 @@ async function loadDomains() {
       return;
     }
     const body = await resp.json();
-    if (currentMode === 'watch') {
-      watchMeta = body;
-      allDomains = body.items || [];
-    } else {
-      watchMeta = null;
-      allDomains = body;
-    }
-    renderWatchContext();
+    listMeta = body;
+    allDomains = body.items || [];
+    renderContext();
     updateStats();
     renderDomains();
   } catch(e) {
@@ -166,13 +157,23 @@ async function postBaseline(at, message) {
   }
 }
 
-// 監視モードの前置き。「どこまで見えているか」を必ず出す ——
-// 材料が貯まっていない時期の「0件」を、平穏だと読み違えないため
-function renderWatchContext() {
-  const box = document.getElementById('watch-context');
+// 一覧の前置き。「どこまで見えているか」を両方のモードで必ず出す ——
+// 監視は、材料が貯まっていない時期の「0件」を平穏だと読み違えないため。
+// ブロック済みは、件数（Pi-hole の集計）とアクセス元・期間（手元に貯めたクエリ）で
+// 出どころが違うため —— 断らずに並べると、保持期間より前のことまで書いてあるように読める
+function renderContext() {
+  const box = document.getElementById('list-context');
   const bar = document.getElementById('watch-baseline');
-  if (currentMode !== 'watch' || !watchMeta) { box.hidden = true; bar.hidden = true; return; }
-  const m = watchMeta;
+  if (!listMeta) { box.hidden = true; bar.hidden = true; return; }
+  const m = listMeta;
+
+  if (currentMode !== 'watch') {
+    // 基準日時は監視だけの設定（ブロック済みの一覧には窓が無い）
+    bar.hidden = true;
+    box.innerHTML = blockedContextHtml(m);
+    box.hidden = false;
+    return;
+  }
 
   // 基準日時の入力欄を、いまの設定に合わせる（未設定なら空）
   bar.hidden = false;
@@ -188,7 +189,7 @@ function renderWatchContext() {
       + `（それより前は「はじめて見た」を判定できません）。`);
   }
   parts.push(m.baseline
-    ? `<strong>${escapeHtml(shortTime(new Date(m.since * 1000).toISOString()))} 以降</strong>`
+    ? `<strong>${escapeHtml(shortTimeAt(m.since))} 以降</strong>`
       + `（${m.window_hours} 時間ぶん）を、過去 ${m.backfill_days} 日ぶんの記録`
       + `（${(m.total_domains||0).toLocaleString()} ドメイン）と突き合わせています。`
       + `件数と種別は手元に貯まっている ${Math.floor(m.data_hours)} 時間ぶんが対象です。`
@@ -200,6 +201,19 @@ function renderWatchContext() {
   }
   box.innerHTML = parts.join('<br>') + methodsHtml(m);
   box.hidden = false;
+}
+
+// ブロック済みの一覧の前置き。1つの行に出どころの違う数字が並ぶので、そこを断る
+function blockedContextHtml(m) {
+  const base = '<strong>件数</strong>は Pi-hole の集計（設定の「取り込む件数」ぶん）です。';
+  if (!m.data_since) {
+    return base + '<br><strong>アクセス元と期間</strong>は貯めたクエリから出しますが、'
+      + 'まだ1件も貯まっていません（取り込みが済むと出ます）。';
+  }
+  return base + `<br><strong>アクセス元と期間</strong>は、手元に貯まっている記録`
+    + `（${escapeHtml(shortTimeAt(m.data_since))} 以降）の中で、`
+    + `Pi-hole が止めたクエリだけを数えたものです。`
+    + `それより前のブロックは、件数に入っていても期間には出ません。`;
 }
 
 // 「どうやって候補を選んでいるか」。畳んでおく（普段は前置きの数行だけ読めばよく、
@@ -226,7 +240,8 @@ function methodsHtml(m) {
       過去の記録と突き合わせて判定しています。判定はこのアプリの中のルールで行っていて、
       AIには渡していません（AIに聞くのは、絞り込んだ後の「これは何か」だけ）。
       Pi-holeがブロックしたかどうかでは絞っていないので、ブロック済みのドメインが
-      混ざることもあります。<strong>理由の札を押すと、Pi-holeのクエリログで
+      混ざることもあります（<strong>その行には「Pi-holeが止めている」の印が付きます</strong>。
+      止められているのに端末が鳴らし続けていること自体が見たい情報なので、落としていません）。<strong>理由の札を押すと、Pi-holeのクエリログで
       その通信だけを絞り込んで開きます。</strong>
     </p>
     <ul class="watch-method-list">${rows}</ul>
@@ -235,6 +250,10 @@ function methodsHtml(m) {
 
 function showFetchError() {
   allDomains = [];
+  // 前置きも消す。 取れなかったのに「どこまで見えているか」だけ前の応答のまま残ると、
+  // 一覧が空なのか読めなかったのかが画面から区別できない
+  listMeta = null;
+  renderContext();
   document.getElementById('stat-new').textContent = '-';
   document.getElementById('stat-reviewed').textContent = '-';
   document.getElementById('stat-total').textContent = '-';
@@ -278,29 +297,34 @@ function reviewedBadge(d) {
   return d.reviewed ? '<span class="badge reviewed">確認済</span>' : '';
 }
 
-// 理由の元になった通信を、Pi-hole のクエリログで絞り込んで開く URL。
+// Pi-hole のクエリログを絞り込んで開く URL（理由の札と、行の「Pi-holeで見る」）。
 // パラメータ名は Pi-hole のものをサーバがそのまま返している（domain / client_ip /
 // type / reply）ので、ここは値をエンコードして並べるだけでよい —— 手ごとに違う絞り込み方
 // （種別なら type、NXDOMAIN なら reply）を画面側に散らかさない。
 // 時間の範囲は判定に使った窓とそろえる（画面が持つ現在時刻は使わない）。
 // Pi-hole の管理画面の URL が分からなければ空を返し、呼び出し側がリンクをやめる
 function piholeQueryUrl(filter) {
-  if (!watchMeta || !watchMeta.pihole_url || !filter) return '';
+  if (!listMeta || !listMeta.pihole_url || !filter) return '';
   const params = Object.entries(filter).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   if (!params.length) return '';
-  if (watchMeta.since) params.push(`from=${watchMeta.since}`);
-  if (watchMeta.until) params.push(`until=${watchMeta.until}`);
-  return `${watchMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
+  // 時間の範囲は監視のときだけ付く（応答に窓が入っているのはあちらだけ）。
+  // ブロック済みの一覧には窓が無いので、Pi-hole 側の既定の範囲で開く
+  if (listMeta.since) params.push(`from=${listMeta.since}`);
+  if (listMeta.until) params.push(`until=${listMeta.until}`);
+  return `${listMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
 }
 
 // AIに渡す「候補に挙げた理由」。画面に出している文をそのまま渡す ——
 // 人が読んでいる根拠とAIが見ている根拠が食い違うと、答えが当たっているのか判断できない
 function reasonText(d) {
   if (!d || !d.reasons || !d.reasons.length) return '';
-  const detail = d.reasons.map(r => r.detail).join(' / ');
-  return (d.clients && d.clients.length)
-    ? `${detail}。この間に引いた端末: ${d.clients.join(', ')}`
-    : detail;
+  const parts = [d.reasons.map(r => r.detail).join(' / ')];
+  if (d.clients && d.clients.length) parts.push(`この間に引いた端末: ${d.clients.join(', ')}`);
+  // 止められていることもそのまま渡す —— 画面に「Pi-holeが止めている」と出ているのに
+  // AIが素通りしている前提で答えると、読み比べたときにどちらが正しいのか分からない
+  const blocked = blockedMark(d);
+  if (blocked) parts.push(blocked);
+  return parts.join('。');
 }
 
 function reasonsHtml(d) {
@@ -317,10 +341,77 @@ function reasonsHtml(d) {
         + ` title="Pi-holeのクエリログで、この通信だけを絞り込んで開く">${escapeHtml(r.detail)}</a>`;
     })
     .join('');
-  // どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）
-  const clients = (d.clients && d.clients.length)
-    ? `<span class="reason-clients">${escapeHtml(d.clients.join(', '))}</span>` : '';
-  return `<div class="reasons">${items}${clients}</div>`;
+  return `<div class="reasons">${items}</div>`;
+}
+
+// Pi-hole が止めているかどうかの印。監視の一覧はブロックの有無で絞っていないので、
+// 止められているドメインも挙がる —— 落とさずに印を付ける（止められているのに端末が
+// 鳴らし続けていること自体が見たい情報で、一覧から消すとそれが見えなくなる）。
+// 一部だけ止まっている場合は数を添える（端末ごとの設定・CNAME経由で分かれる）。
+// ブロック済みの一覧では出さない（全部が止まったものなので、印にならない）
+function blockedMark(d) {
+  if (currentMode !== 'watch' || !d.blocked_count) return '';
+  return d.blocked_count >= d.count
+    ? 'Pi-holeが止めている'
+    : `一部をPi-holeが止めている（${d.count} 回中 ${d.blocked_count} 回）`;
+}
+
+// 「まだ続いている」とみなす、最後の通信からの間隔（秒）。
+// 一覧を開いた時点で鳴りやんだばかりのものまで拾いたいので、分単位では短すぎる
+const ONGOING_SECS = 3600;
+
+// 最後の通信がついさっきか（＝いまも続いている通信か）。
+// 判定はサーバの時刻でする（応答の `now`）—— 画面の時計で測ると、端末の時計が
+// ずれているだけで常に続いて見えたり、逆に一度も続かなくなる
+// （記録の時刻は Pi-hole 側の時計で付いている）
+function isOngoing(d) {
+  const now = listMeta && listMeta.now;
+  return !!(now && d.active_to && now - d.active_to <= ONGOING_SECS);
+}
+
+// 通信が起きていた期間。同じ分に収まるなら1つだけ出す
+// （「8/19 21:03 〜 8/19 21:03」は幅を取るだけで何も足さない）。
+// いまも続いているものは終わりを太字にする —— 一覧で見分けたいのは
+// 「もう止まった通信」と「いま鳴っている通信」で、日時を読み比べないと
+// 分からないのでは何十行も並んだときに拾えない
+function periodHtml(d) {
+  if (!d.active_from || !d.active_to) return '';
+  const from = escapeHtml(shortTimeAt(d.active_from));
+  const to = escapeHtml(shortTimeAt(d.active_to));
+  const ongoing = isOngoing(d);
+  const end = ongoing ? `<strong class="period-now">${to}</strong>` : to;
+  const title = ongoing
+    ? `この範囲で通信が起きていた期間（直近1時間以内にも出ている＝いまも続いている）`
+    : 'この範囲で通信が起きていた期間';
+  const body = from === to ? end : `${from} 〜 ${end}`;
+  return `<span class="period" title="${title}">${body}</span>`;
+}
+
+// 観測した事実（期間・引いた端末・Pi-hole のクエリログへの入口）。
+// 両方のモードで同じ形にする —— 「誰が・いつからいつまで」はどちらの一覧でも
+// 同じ問いに答えるものなので、片方だけ別の見せ方にすると読み替えが要る。
+// どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）。
+// 範囲は前置きが断っている（監視は見ている窓、ブロック済みは手元に貯まっている記録）
+function activityHtml(d) {
+  const parts = [];
+  const blocked = blockedMark(d);
+  if (blocked) {
+    parts.push(`<span class="blocked-mark" title="この一覧はブロックの有無で絞っていないので、`
+      + `Pi-holeが止めているドメインも挙がります">${escapeHtml(blocked)}</span>`);
+  }
+  const period = periodHtml(d);
+  if (period) parts.push(period);
+  if (d.clients && d.clients.length) {
+    parts.push(`<span class="reason-clients">${escapeHtml(d.clients.join(', '))}</span>`);
+  }
+  // ドメインで絞り込んだクエリログ。理由の札（監視）と違って条件はドメインだけ ——
+  // 「本当にそうなっているか」は元の通信を見るのが一番早い
+  const url = piholeQueryUrl({domain: d.domain});
+  if (url) {
+    parts.push(`<a class="pihole-link" href="${escapeHtml(url)}" target="_blank" rel="noopener"`
+      + ` title="Pi-holeのクエリログを、このドメインで絞り込んで開く">Pi-holeで見る</a>`);
+  }
+  return parts.length ? `<div class="activity">${parts.join('')}</div>` : '';
 }
 
 function renderDomains() {
@@ -350,6 +441,7 @@ function renderDomains() {
       <div class="domain-info">
         <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
         ${reasonsHtml(d)}
+        ${activityHtml(d)}
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
       </div>
       <div class="domain-actions">
@@ -530,6 +622,7 @@ function renderDetail() {
       <span>${d.reasons ? '直近' : 'ブロック'} ${d.count.toLocaleString('ja-JP')} 回</span>
     </div>
     ${reasonsHtml(d)}
+    ${activityHtml(d)}
     ${d.research ? `
       <div class="detail-label detail-label-row">
         <span>AIの調査結果${d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
@@ -1135,34 +1228,155 @@ async function saveToken() {
 // その先に本当に届くのかは分からない —— 実際にパケットを出して確かめる場所を用意する。
 // 相手先の確かめとコマンドの組み立てはサーバ側（src/diag.rs）。画面は文字を渡すだけ
 
-// ---- ページの切り替え（ドメイン / 設定）----
-// URL のハッシュで持つ。 戻る/進むとブックマークをそのまま効かせるため
-// （JS でボタンを押し替える作りだと、どちらも効かない）。
-// 知らないハッシュはドメインに倒す —— 白い画面を出さない
+// ---- ページとモードの切り替え（ドメイン / 設定・ブロック済み / 未ブロックの監視）----
+// どちらも URL のハッシュで持つ（`#domains/watch` の形）。 戻る/進むとブックマークを
+// そのまま効かせるため（JS でボタンを押し替える作りだと、どちらも効かない）。
+// モードも URL に入れる。 変数だけで持っていた頃は、監視を見ている最中に
+// 読み直す（下に引っ張って更新・PWA の復帰）とブロック済みへ戻っていた ——
+// 押した覚えの無い切り替わり方で、しかも一覧が似ているので気づきにくい。
+// 知らない値はそれぞれ既定に倒す —— 白い画面を出さない
 const PAGES = ['domains', 'settings'];
+const MODES = ['blocked', 'watch'];
 let currentPage = 'domains';
 
-function pageFromHash() {
-  const name = (location.hash || '').replace(/^#/, '');
-  return PAGES.includes(name) ? name : 'domains';
+function routeFromHash() {
+  const [page, mode] = (location.hash || '').replace(/^#/, '').split('/');
+  return {
+    page: PAGES.includes(page) ? page : 'domains',
+    // モードの無いハッシュ（`#domains` / `#settings`）ではモードを変えない ——
+    // 設定を開いただけで一覧が入れ替わるのは、押した覚えの無い切り替わり方
+    mode: MODES.includes(mode) ? mode : null,
+  };
 }
 
-function applyPage() {
-  currentPage = pageFromHash();
+// `initial` は最初の1回。 モードが決まっても読み直さない ——
+// この直後に `loadDomains()` を1回呼ぶので、同じ一覧を二重に取りに行かないため
+function applyRoute(initial) {
+  const route = routeFromHash();
+  const modeChanged = route.mode !== null && route.mode !== currentMode;
+  if (modeChanged) {
+    currentMode = route.mode;
+    // モードを跨いだ選択は残さない。 別の一覧の行を選んだまま「選択を確認済みにする」を
+    // 押すと、見えていないものを確認済みにすることになる
+    selectedDomains.clear();
+  }
+  currentPage = route.page;
   for (const name of PAGES) {
     document.getElementById(`page-${name}`).hidden = name !== currentPage;
     document.getElementById(`page-btn-${name}`).classList.toggle('active', name === currentPage);
   }
+  // ヘッダーの「ドメイン」はいま見ているモードへ戻す —— `#domains` へ戻すと、
+  // 設定から帰ってきて読み直したときにタブが入れ替わる
+  document.getElementById('page-btn-domains').href = `#domains/${currentMode}`;
+  for (const mode of MODES) {
+    document.getElementById(`mode-${mode}`).classList.toggle('active', mode === currentMode);
+  }
+  if (modeChanged && !initial) loadDomains();
   // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになるし、
   // Chiezoを後から起動した場合に、画面を読み直さなくても相手が出てくる
   if (currentPage === 'settings') {
     loadSettings();
+    loadNotes();
     setAiStatus('');
     loadAi().then(renderAiList);
   }
 }
 
-window.addEventListener('hashchange', applyPage);
+window.addEventListener('hashchange', () => applyRoute());
+
+// ---- 設定：メモが残っているドメイン ----
+// 一覧（ブロック済み・未ブロックの監視）はどちらも「いま出ているもの」しか並べない ——
+// ブロック済みは Pi-hole の集計そのもの、監視は見ている窓の中だけ。
+// 静かになったドメインのメモはどちらにも出てこないので、控えをここに置く。
+// 並べるだけで、編集も削除もしない（直すのは一覧の側から）
+
+function setNotesStatus(message, kind) {
+  const el = document.getElementById('notes-status');
+  el.textContent = message;
+  el.className = `settings-status ${kind || ''}`;
+}
+
+// 1ページの件数。サーバ側の NOTES_LIMIT_DEFAULT と同じ値にすること
+// （画面が送らなければサーバがこの数で切る）
+const NOTES_PAGE = 50;
+// いま何件目から見ているか。ページを跨いで持つ（「読み直す」でも同じ場所に留まる）
+let notesOffset = 0;
+
+// `offset` を渡すとそのページへ移る。省略するといまのページを読み直す
+async function loadNotes(offset) {
+  if (typeof offset === 'number') notesOffset = Math.max(0, offset);
+  const list = document.getElementById('note-list');
+  list.innerHTML = '<div class="loading">読み込み中...</div>';
+  try {
+    const resp = await fetch(`/api/notes?offset=${notesOffset}&limit=${NOTES_PAGE}`);
+    const body = await resp.json();
+    // 消えた行があって行き過ぎていたら先頭へ戻す ——
+    // 「まだ56件あるのに空のページ」を出さないため
+    if (!(body.items || []).length && body.total > 0 && notesOffset > 0) {
+      return loadNotes(0);
+    }
+    notesOffset = body.offset || 0;
+    renderNotes(body);
+  } catch(e) {
+    list.innerHTML = '';
+    document.getElementById('note-nav').innerHTML = '';
+    setNotesStatus('メモの一覧を読み込めませんでした', 'error');
+  }
+}
+
+function renderNotes(body) {
+  const items = body.items || [];
+  const total = body.total || 0;
+  const offset = body.offset || 0;
+  const list = document.getElementById('note-list');
+  setNotesStatus(items.length
+    ? `${offset + 1}–${offset + items.length} / ${total} 件`
+    : `${total} 件`);
+  renderNotesNav(items.length, total, offset);
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-note">まだメモはありません。</div>';
+    return;
+  }
+  // ページを移ったら控えの頭から読ませる（中でスクロールする箱なので、
+  // 前のページで下まで送った位置が残ると、次のページが途中から出てくる）
+  list.scrollTop = 0;
+  // 調査結果は畳んでおく（1件で何十行にもなるので、開いたまま並べると控えを見渡せない）。
+  // メモが空でも調査結果や確認済みだけの行はあるので、行ごと落とさない
+  list.innerHTML = items.map(n => `
+    <div class="note-item">
+      <div class="note-item-head">
+        <span class="note-domain">${escapeHtml(n.domain)}</span>
+        <span class="badge ${n.reviewed ? 'reviewed' : 'unreviewed'}">${n.reviewed ? '確認済' : '未確認'}</span>
+        <span class="note-when">${escapeHtml(shortTime(n.updated_at))}</span>
+        <button class="copy-btn" data-domain="${escapeHtml(n.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button>
+      </div>
+      ${n.note
+        ? `<div class="domain-note">${escapeHtml(n.note)}</div>`
+        : '<div class="domain-note is-empty">（メモなし）</div>'}
+      ${n.research ? `
+        <details class="note-research">
+          <summary>AIの調査結果${n.researched_at ? `（${escapeHtml(shortTime(n.researched_at))}）` : ''}</summary>
+          <div class="detail-research">${escapeHtml(n.research)}</div>
+        </details>` : ''}
+    </div>
+  `).join('');
+  list.scrollTop = 0;
+}
+
+// ページ送り。控えの下に置く（読み終わった先に次への入口がある）。
+// 行き先が無いボタンは disabled にする —— 押しても何も起きないボタンを残すと、
+// 最後まで来たのか読み込みに失敗したのかが押した人に分からない
+function renderNotesNav(shown, total, offset) {
+  const nav = document.getElementById('note-nav');
+  if (total <= NOTES_PAGE) { nav.innerHTML = ''; return; }
+  const first = offset <= 0;
+  const last = offset + shown >= total;
+  nav.innerHTML = `
+    <button class="action-btn cancel-btn" onclick="loadNotes(notesOffset - NOTES_PAGE)" ${first ? 'disabled' : ''}>前へ</button>
+    <span class="note-page">${Math.floor(offset / NOTES_PAGE) + 1} / ${Math.ceil(total / NOTES_PAGE)} ページ</span>
+    <button class="action-btn cancel-btn" onclick="loadNotes(notesOffset + NOTES_PAGE)" ${last ? 'disabled' : ''}>次へ</button>
+  `;
+}
 
 // ---- 設定：Pi-holeから取り込む件数 ----
 
@@ -1601,6 +1815,6 @@ document.getElementById('ai-list').addEventListener('change', e => {
 });
 
 renderTheme();
-applyPage();
+applyRoute(true);
 loadDomains();
 loadAi();
