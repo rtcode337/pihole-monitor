@@ -1160,6 +1160,54 @@ a.reason-link:hover {
   white-space: pre;
 }
 
+/* アクセス元の内訳。日数ぶん列が伸びるので、この箱の中で横スクロールさせる ——
+   ページごと横に伸ばすと、他の設定まで横スクロールしないと読めなくなる。
+   狭い画面で列を畳まないのは、日ごとの並びを見比べるための表だから
+   （縦に積み替えると「増えたか減ったか」が読めなくなる） */
+.client-table-wrap {
+  overflow-x: auto;
+}
+
+.client-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  /* 幅いっぱいには広げない。 列が少ない日は詰めて出すほうが読みやすい */
+  white-space: nowrap;
+}
+
+.client-table th,
+.client-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+}
+
+.client-table th {
+  color: var(--c-muted);
+  font-weight: 400;
+  position: sticky;
+  top: 0;
+  background: var(--c-surface);
+}
+
+/* IPは左端に貼り付ける。 横へスクロールしたときに、どの行を見ているのか分からなくなる */
+.client-ip {
+  color: var(--c-text);
+  position: sticky;
+  left: 0;
+  background: var(--c-surface);
+  font-variant-numeric: tabular-nums;
+}
+
+.client-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+
+/* 0件の日は数字を出さず点にする。 0が並ぶと、数字の入っている日を目で拾えない */
+.client-num.is-zero { color: var(--c-dim); }
+
 /* メモが残っているドメインの控え。一覧の行と同じ見た目にはしない ——
    ここは操作する場所ではなく読む場所で、1行に何十件も並べるより
    ドメイン・状態・時刻・本文を素直に積むほうが探しやすい */

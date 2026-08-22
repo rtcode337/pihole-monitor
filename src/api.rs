@@ -60,6 +60,10 @@ pub fn router() -> Router<AppState> {
         // 設定画面の疎通確認(ping / 経路)。一覧の判定には関わらない ——
         // 名前を引いた記録だけでは「その先に届くのか」が分からないので、手で叩ける口を置く
         .route("/api/diag", post(diag))
+        // アクセス元(端末)ごとの日ごとの件数。設定のページが読む ——
+        // 一覧は「どのドメインか」で並んでいるので、「どの端末が喋っているか」は
+        // ここでしか見られない(ルーター経由に化けている割合の推移もここで追う)
+        .route("/api/clients", get(clients_get))
         // メモ・確認済みが残っているドメインの控え。設定のページが読む ——
         // 2つの一覧はどちらも「いま出ているもの」しか並べないので、
         // 落ち着いたドメインの記録はここからしか辿れない
@@ -525,6 +529,31 @@ async fn domains(State(state): State<AppState>) -> Response {
         "items": entries,
     }))
     .into_response()
+}
+
+/// アクセス元の内訳で出す日数の既定。2週間あれば「先週と比べて減ったか」が読める。
+const CLIENT_DAYS_DEFAULT: i64 = 14;
+
+/// 出せる日数の上限。青天井にしない —— 列がそのまま横に伸びて表が読めなくなる。
+const CLIENT_DAYS_MAX: i64 = 90;
+
+#[derive(Deserialize)]
+struct ClientsQuery {
+    /// 何日ぶん出すか(既定 [`CLIENT_DAYS_DEFAULT`])
+    #[serde(default)]
+    days: Option<i64>,
+}
+
+/// アクセス元ごとの日ごとの件数(設定のページの内訳)。
+///
+/// 材料は `dns_client_daily` なので、生のクエリの保持期間より長く遡れる。
+/// Pi-hole は叩かない。
+async fn clients_get(State(state): State<AppState>, Query(q): Query<ClientsQuery>) -> Response {
+    let days = q.days.unwrap_or(CLIENT_DAYS_DEFAULT).clamp(1, CLIENT_DAYS_MAX);
+    match state.db.client_daily(days).await {
+        Ok((days, items)) => Json(json!({ "days": days, "items": items })).into_response(),
+        Err(e) => internal_error(e, "アクセス元の内訳を読み出せない"),
+    }
 }
 
 /// 控えの1ページの件数(画面もこの数で区切る)。

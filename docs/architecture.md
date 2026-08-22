@@ -29,6 +29,7 @@ classDiagram
         +/api/review 確認済みにする
         +/api/note メモ
         +/api/notes メモの残る全ドメイン（控え）
+        +/api/clients アクセス元ごとの日ごとの件数
         +/api/ask まとめて聞く
         +/api/investigate 1件を詳しく調べる
         +/api/followup 調査結果をもとに追加で聞く

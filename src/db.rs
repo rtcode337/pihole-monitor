@@ -63,6 +63,18 @@ pub struct NoteRow {
     pub researched_at: String,
 }
 
+/// アクセス元1件の日ごとの件数(設定のページの「アクセス元の内訳」に出す)。
+///
+/// `counts` は返す `days` と同じ並び・同じ長さ(その日に出ていなければ 0)。
+/// 画面が日付とつき合わせずに済むよう、穴埋めはここでやる。
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientDaily {
+    pub client: String,
+    /// 記録している全期間の合計(表に出す日数だけの合計ではない)
+    pub total: i64,
+    pub counts: Vec<i64>,
+}
+
 /// ドメインごとの観測(ある範囲での件数・引いた端末・通信が起きていた期間)。
 ///
 /// ブロック済みの一覧と監視の候補が同じ形を使う。 出どころ(Pi-holeの集計 /
@@ -244,6 +256,71 @@ impl Db {
 
     /// 確認済み / 未確認をまとめて切り替える(1件でも同じ経路)。
     ///
+    /// アクセス元ごとの日ごとの件数を、新しいほうから `days` 日ぶん返す。
+    ///
+    /// 材料は `dns_client_daily`(生のクエリが消えても残す表)。 だから
+    /// 保持期間より長い並びが出せる —— 見たいのは「この端末が急に見えなくなった」
+    /// 「ルーター経由の割合が減った」といった動きで、1日の数字だけでは言えない。
+    ///
+    /// 合計は全期間ぶんを返す(表に出す日数の合計ではない)。 並べ替えのキーであり、
+    /// 「そもそもどれだけ喋っている相手か」は表の外まで含めて見たいため。
+    pub async fn client_daily(&self, days: i64) -> Result<(Vec<String>, Vec<ClientDaily>)> {
+        self.with_conn(move |conn| {
+            // 出す日は「記録のある日」の新しいほうから。 今日から数えると、
+            // 取り込みが止まっていた日や記録の無い日が空の列として並ぶ
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT day FROM dns_client_daily ORDER BY day DESC LIMIT ?1")?;
+            let mut shown: Vec<String> = stmt
+                .query_map([days], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            shown.reverse();
+
+            let mut totals: HashMap<String, i64> = HashMap::new();
+            let mut stmt = conn.prepare("SELECT client, SUM(count) FROM dns_client_daily GROUP BY client")?;
+            for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+                let (client, total) = row?;
+                totals.insert(client, total);
+            }
+
+            // 表に出す日の中身。日付 → 列の位置に置き換えてから穴を埋める
+            let index: HashMap<&str, usize> =
+                shown.iter().enumerate().map(|(i, d)| (d.as_str(), i)).collect();
+            let mut counts: HashMap<String, Vec<i64>> = HashMap::new();
+            if let Some(first) = shown.first() {
+                let mut stmt = conn
+                    .prepare("SELECT day, client, count FROM dns_client_daily WHERE day >= ?1")?;
+                let rows = stmt.query_map([first], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                })?;
+                for row in rows {
+                    let (day, client, n) = row?;
+                    if let Some(&i) = index.get(day.as_str()) {
+                        counts
+                            .entry(client)
+                            .or_insert_with(|| vec![0; shown.len()])[i] = n;
+                    }
+                }
+            }
+
+            // 多い順。同数のときはアクセス元の名前で並びを固定する
+            // (HashMap の列挙順は毎回変わるので、読み直すたびに行が入れ替わってしまう)
+            let mut items: Vec<ClientDaily> = totals
+                .into_iter()
+                .map(|(client, total)| ClientDaily {
+                    counts: counts
+                        .get(&client)
+                        .cloned()
+                        .unwrap_or_else(|| vec![0; shown.len()]),
+                    client,
+                    total,
+                })
+                .collect();
+            items.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.client.cmp(&b.client)));
+            Ok((shown, items))
+        })
+        .await
+    }
+
     /// 記録の残っているドメインを、更新の新しい順に1ページぶん返す(件数の総数も一緒に)。
     ///
     /// 出す対象は間引かない(一覧に出ているかどうかは見ない)。 設定のページはここを

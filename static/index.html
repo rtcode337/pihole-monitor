@@ -170,6 +170,24 @@
     <pre class="diag-output" id="diag-output" hidden></pre>
   </div>
 
+  <!-- アクセス元（端末）ごとの件数。一覧は「どのドメインか」で並んでいるので、
+       「どの端末が喋っているか」はここでしか見られない。日ごとに出すのは、
+       1日の数字だけでは「増えたのか減ったのか」が言えないため -->
+  <div class="settings-section">
+    <div class="detail-label">アクセス元（端末別）</div>
+    <div class="settings-note">
+      Pi-hole に届いた問い合わせを、<strong>アクセス元のIPごと・日ごと</strong>に数えたものです。
+      生のクエリが保持期間で消えた後も残るので、<strong>長い並びで推移を見られます</strong>。
+      <strong>ルーターのIPが大きいときは、その先の端末がルーター経由で引いています</strong>
+      （DNSの配り方かNATの経路を疑うところ）。
+    </div>
+    <div class="diag-row">
+      <button class="action-btn review-btn" id="clients-reload" onclick="loadClients()">読み直す</button>
+      <span class="settings-status" id="clients-status"></span>
+    </div>
+    <div class="client-table-wrap" id="client-table"></div>
+  </div>
+
   <!-- 調べたものの控え。2つの一覧はどちらも「いま出ているもの」しか並べないので、
        静かになったドメインのメモはここからしか読めない。長くなるので一番下に置く -->
   <div class="settings-section">

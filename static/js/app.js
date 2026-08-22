@@ -1276,6 +1276,7 @@ function applyRoute(initial) {
   // Chiezoを後から起動した場合に、画面を読み直さなくても相手が出てくる
   if (currentPage === 'settings') {
     loadSettings();
+    loadClients();
     loadNotes();
     setAiStatus('');
     loadAi().then(renderAiList);
@@ -1283,6 +1284,70 @@ function applyRoute(initial) {
 }
 
 window.addEventListener('hashchange', () => applyRoute());
+
+// ---- 設定：アクセス元（端末別） ----
+// 一覧は「どのドメインか」で並んでいるので、「どの端末が喋っているか」はここでしか見られない。
+// 材料は dns_client_daily（生のクエリが消えても残す表）なので、保持期間より長く遡れる。
+// 日ごとに出すのは、1日の数字だけでは増えたのか減ったのかが言えないため
+
+// 出す日数。サーバ側の CLIENT_DAYS_DEFAULT と同じ値にすること
+const CLIENT_DAYS = 14;
+
+function setClientsStatus(message, kind) {
+  const el = document.getElementById('clients-status');
+  el.textContent = message;
+  el.className = `settings-status ${kind || ''}`;
+}
+
+async function loadClients() {
+  const box = document.getElementById('client-table');
+  box.innerHTML = '<div class="loading">読み込み中...</div>';
+  try {
+    const resp = await fetch(`/api/clients?days=${CLIENT_DAYS}`);
+    renderClients(await resp.json());
+  } catch(e) {
+    box.innerHTML = '';
+    setClientsStatus('アクセス元を読み込めませんでした', 'error');
+  }
+}
+
+// 日付の列見出し。「08-19」を「8/19」に詰める（列が何本も並ぶので字数を削る）
+function shortDay(day) {
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(day);
+  return m ? `${Number(m[1])}/${Number(m[2])}` : day;
+}
+
+function renderClients(body) {
+  const days = body.days || [];
+  const items = body.items || [];
+  const box = document.getElementById('client-table');
+  const all = items.reduce((sum, x) => sum + x.total, 0);
+  setClientsStatus(`${items.length} 個のアクセス元 / 累計 ${all.toLocaleString('ja-JP')} 件`);
+  if (!items.length) {
+    box.innerHTML = '<div class="empty-note">まだ記録がありません。</div>';
+    return;
+  }
+  // 割合は全期間の合計に対するもの（列に出している日数ぶんではない）——
+  // 「ルーター経由がどれだけを占めているか」を見るための数字なので、
+  // 表に出す日数を変えたら意味が変わる、という作りにしない
+  const rows = items.map(x => `
+    <tr>
+      <td class="client-ip">${escapeHtml(x.client)}</td>
+      <td class="client-num">${x.total.toLocaleString('ja-JP')}</td>
+      <td class="client-num">${all ? (x.total / all * 100).toFixed(1) : '0.0'}%</td>
+      ${x.counts.map(n => `<td class="client-num${n ? '' : ' is-zero'}">${n ? n.toLocaleString('ja-JP') : '·'}</td>`).join('')}
+    </tr>`).join('');
+  box.innerHTML = `
+    <table class="client-table">
+      <thead>
+        <tr>
+          <th>アクセス元</th><th class="client-num">累計</th><th class="client-num">割合</th>
+          ${days.map(d => `<th class="client-num">${escapeHtml(shortDay(d))}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
 
 // ---- 設定：メモが残っているドメイン ----
 // 一覧（ブロック済み・未ブロックの監視）はどちらも「いま出ているもの」しか並べない ——
