@@ -361,15 +361,49 @@ a.reason-link:hover {
   color: var(--c-dim);
 }
 
-/* 観測した事実（期間・引いた端末・Pi-holeのクエリログへの入口）。
+/* 観測した事実（アクセス元ごとの期間と件数・Pi-holeのクエリログへの入口）。
    理由の札（色で手を見分ける）とは別の行にする —— 同じ行に混ぜると、
-   「なぜ挙がったか」と「いつ・誰が」が同じ重さの札に見える */
+   「なぜ挙がったか」と「いつ・誰が」が同じ重さの札に見える。
+   中は縦に積む —— アクセス元は1台1行で出す（下の .client-line を参照） */
 .activity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+/* ドメインについての印と入口（Pi-holeが止めている・Pi-holeで見る）。
+   端末の行より前に置く —— 行数は端末の数で変わるので、後ろに置くと
+   押す場所がドメインごとに上下する */
+.activity-head {
   display: flex;
   flex-wrap: wrap;
   gap: 5px 8px;
-  margin-top: 4px;
   align-items: center;
+}
+
+/* アクセス元1台ぶんの行（期間 アクセス元IP （件数））。
+   期間に幅の下限を持たせて、IPの頭を行の間でそろえる —— 期間は
+   「8/19 21:03 〜 8/22 10:04」と「8/19 21:03」（同じ分に収まった場合）で
+   長さが違い、そのまま並べるとIPの位置が行ごとにずれて読み比べられない。
+   下限なので、はみ出す端末（IPv6）は自分の幅を取る */
+.client-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1px 8px;
+}
+
+.client-line .period {
+  min-width: 11.5em;
+}
+
+/* その端末からの件数。数字が並ぶので等幅にする */
+.client-count {
+  font-size: 10px;
+  color: var(--c-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 通信が起きていた期間。数字が並ぶので等幅にして、桁の位置をそろえる */

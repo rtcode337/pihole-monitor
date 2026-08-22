@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::db::Db;
+use crate::db::{ClientActivity, Db};
 
 /// 基準日時が未設定のときに見る窓(秒)。初出もNXDOMAINもこの窓で数える。
 /// 長くすると候補が増えて読めなくなり、短くすると寝ている間の出来事を見落とす。
@@ -273,8 +273,8 @@ pub struct WatchItem {
     pub research: String,
     pub researched_at: String,
     pub reasons: Vec<Reason>,
-    /// この窓で引いた端末(分かる範囲。件数の多い順)
-    pub clients: Vec<String>,
+    /// この窓で引いた端末(分かる範囲。件数の多い順)。1台ずつ件数と期間を持つ
+    pub clients: Vec<ClientActivity>,
     /// はじめて見た時刻(unix秒)。遡り取り込みで埋めた行は日単位の粒度
     pub first_seen: i64,
     /// この窓で実際に通信が起きていた期間(unix秒。1件も無ければ 0)。

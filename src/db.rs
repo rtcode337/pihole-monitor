@@ -75,6 +75,23 @@ pub struct ClientDaily {
     pub counts: Vec<i64>,
 }
 
+/// アクセス元1件ぶんの観測(そのドメインを引いた端末・件数・鳴っていた期間)。
+///
+/// ドメインの一覧が1台ずつ「期間 アクセス元 (件数)」で出す。 かつては期間を
+/// ドメイン全体で1つ出し、その後ろに端末の名前を並べていたが、2台以上あると
+/// 「どちらがいつ引いたのか」が言えなかった —— 期間はドメインのもの、
+/// 名前はただの並びで、両者が結びついていない。
+///
+/// 時刻は秒に丸めた unix秒。 応答の `active_from` / `active_to` と
+/// 同じ名前・同じ意味にしてあるので、画面は同じ組み立てで期間を出せる。
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientActivity {
+    pub client: String,
+    pub count: i64,
+    pub active_from: i64,
+    pub active_to: i64,
+}
+
 /// ドメインごとの観測(ある範囲での件数・引いた端末・通信が起きていた期間)。
 ///
 /// ブロック済みの一覧と監視の候補が同じ形を使う。 出どころ(Pi-holeの集計 /
@@ -88,8 +105,8 @@ pub struct DomainActivity {
     /// 絞っていないので、止められているドメインが混ざる。落とさずに印を付ける
     /// (止められているのに端末が鳴らし続けているのは、それ自体が見たい情報)
     pub blocked: i64,
-    /// 引いた端末(件数の多い順)
-    pub clients: Vec<String>,
+    /// 引いた端末(件数の多い順)。1台ずつ件数と期間を持つ
+    pub clients: Vec<ClientActivity>,
     /// 範囲の中で最初/最後に引かれた時刻(unix秒)。1件も無ければ 0
     pub first_ts: f64,
     pub last_ts: f64,
@@ -802,24 +819,28 @@ impl Db {
                     r.get::<_, i64>(5)?,
                 ))
             })?;
-            // 端末は件数の多い順に並べる。 SQLの列挙順のままだと、同じ一覧を
-            // 読み直すたびに並びが変わって「増えた端末」に気づけない
-            let mut clients: HashMap<String, Vec<(String, i64)>> = HashMap::new();
             let mut out: HashMap<String, DomainActivity> = HashMap::new();
             for row in rows {
                 let (domain, client, n, first, last, blocked) = row?;
-                let e = out.entry(domain.clone()).or_default();
+                let e = out.entry(domain).or_default();
                 e.count += n;
                 e.blocked += blocked;
                 e.first_ts = if e.first_ts == 0.0 { first } else { e.first_ts.min(first) };
                 e.last_ts = e.last_ts.max(last);
-                clients.entry(domain).or_default().push((client, n));
+                // 端末ごとの件数と期間は SQL がすでに出している(`GROUP BY domain, client`)。
+                // ここで畳まずにそのまま持つ —— 画面は1台ずつ期間と件数を出す
+                e.clients.push(ClientActivity {
+                    client,
+                    count: n,
+                    active_from: first as i64,
+                    active_to: last as i64,
+                });
             }
-            for (domain, mut list) in clients {
-                list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-                if let Some(e) = out.get_mut(&domain) {
-                    e.clients = list.into_iter().map(|(c, _)| c).collect();
-                }
+            // 端末は件数の多い順に並べる。 SQLの列挙順のままだと、同じ一覧を
+            // 読み直すたびに並びが変わって「増えた端末」に気づけない
+            for e in out.values_mut() {
+                e.clients
+                    .sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.client.cmp(&b.client)));
             }
             Ok(out)
         })

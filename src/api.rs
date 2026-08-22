@@ -16,7 +16,7 @@ use tokio_stream::{StreamExt, iter as stream_iter};
 use crate::ai::{
     Ai, AiChoice, AskError, AskMode, CLI_BACKEND, CLI_LABEL, MAX_DOMAINS_PER_ASK,
 };
-use crate::db::Db;
+use crate::db::{ClientActivity, Db};
 use crate::diag::Event as DiagEvent;
 use crate::pihole::PiholeClient;
 
@@ -87,9 +87,10 @@ struct DomainEntry {
     /// 「詳しく調べる」の結果。メモとは別（詳細画面でメモの上に出す）
     research: String,
     researched_at: String,
-    /// ブロックされた通信を出した端末（件数の多い順）。出どころは貯めたクエリで、
+    /// ブロックされた通信を出した端末（件数の多い順）。1台ずつ件数と期間を持つ ——
+    /// 画面は「期間 アクセス元 (件数)」を1行ずつ出す。出どころは貯めたクエリで、
     /// 件数（Pi-hole の集計）とは範囲が違う —— 画面が前置きでそう断っている
-    clients: Vec<String>,
+    clients: Vec<ClientActivity>,
     /// ブロックされた通信が起きていた期間（unix秒。分からなければ 0）。
     /// 監視の候補（`WatchItem`）と同じ名前・同じ意味にしてある
     active_from: i64,

@@ -319,7 +319,14 @@ function piholeQueryUrl(filter) {
 function reasonText(d) {
   if (!d || !d.reasons || !d.reasons.length) return '';
   const parts = [d.reasons.map(r => r.detail).join(' / ')];
-  if (d.clients && d.clients.length) parts.push(`この間に引いた端末: ${d.clients.join(', ')}`);
+  // 画面と同じく端末ごとに期間と件数を渡す —— まとめて名前だけ渡していた頃は、
+  // 画面には「どの端末がいつ引いたか」が出ているのに AI はそれを知らなかった
+  if (d.clients && d.clients.length) {
+    const each = d.clients
+      .map(c => `${c.client}（${c.count}件、${shortTimeAt(c.active_from)}〜${shortTimeAt(c.active_to)}）`)
+      .join(' / ');
+    parts.push(`この間に引いた端末: ${each}`);
+  }
   // 止められていることもそのまま渡す —— 画面に「Pi-holeが止めている」と出ているのに
   // AIが素通りしている前提で答えると、読み比べたときにどちらが正しいのか分からない
   const blocked = blockedMark(d);
@@ -387,31 +394,52 @@ function periodHtml(d) {
   return `<span class="period" title="${title}">${body}</span>`;
 }
 
-// 観測した事実（期間・引いた端末・Pi-hole のクエリログへの入口）。
+// アクセス元1台ぶんの行（期間 アクセス元IP （件数））。
+// 端末ごとに1行にするのが要点 —— 期間をドメインでまとめて出し、その後ろに
+// 名前だけ並べていた頃は、2台以上あると「どちらがいつ引いたのか」が言えなかった。
+// 件数は手元に貯めたクエリのぶん（ブロック済みの一覧では止められたぶんだけ）で、
+// 行の件数（Pi-hole の集計）とは出どころも範囲も違う —— 前置きが断っている
+function clientLineHtml(c) {
+  const period = periodHtml(c);
+  const count = c.count
+    ? `<span class="client-count" title="この端末から出ていた件数（手元に貯めたクエリ）">`
+      + `（${c.count.toLocaleString('ja-JP')}件）</span>`
+    : '';
+  return `<div class="client-line">${period}`
+    + `<span class="reason-clients">${escapeHtml(c.client)}</span>${count}</div>`;
+}
+
+// 観測した事実（アクセス元ごとの期間と件数・Pi-hole のクエリログへの入口）。
 // 両方のモードで同じ形にする —— 「誰が・いつからいつまで」はどちらの一覧でも
 // 同じ問いに答えるものなので、片方だけ別の見せ方にすると読み替えが要る。
 // どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）。
 // 範囲は前置きが断っている（監視は見ている窓、ブロック済みは手元に貯まっている記録）
 function activityHtml(d) {
-  const parts = [];
+  const clients = d.clients || [];
+  // 印とクエリログへの入口はドメインの話なので、端末の行より前に固定して置く ——
+  // 行数は端末の数で変わるので、後ろに置くと押す場所が行ごとに動く
+  const head = [];
   const blocked = blockedMark(d);
   if (blocked) {
-    parts.push(`<span class="blocked-mark" title="この一覧はブロックの有無で絞っていないので、`
+    head.push(`<span class="blocked-mark" title="この一覧はブロックの有無で絞っていないので、`
       + `Pi-holeが止めているドメインも挙がります">${escapeHtml(blocked)}</span>`);
   }
-  const period = periodHtml(d);
-  if (period) parts.push(period);
-  if (d.clients && d.clients.length) {
-    parts.push(`<span class="reason-clients">${escapeHtml(d.clients.join(', '))}</span>`);
+  // 端末が1台も分からないとき（貯めたクエリに無い）は、ドメインの期間だけでも出す
+  if (!clients.length) {
+    const period = periodHtml(d);
+    if (period) head.push(period);
   }
   // ドメインで絞り込んだクエリログ。理由の札（監視）と違って条件はドメインだけ ——
   // 「本当にそうなっているか」は元の通信を見るのが一番早い
   const url = piholeQueryUrl({domain: d.domain});
   if (url) {
-    parts.push(`<a class="pihole-link" href="${escapeHtml(url)}" target="_blank" rel="noopener"`
+    head.push(`<a class="pihole-link" href="${escapeHtml(url)}" target="_blank" rel="noopener"`
       + ` title="Pi-holeのクエリログを、このドメインで絞り込んで開く">Pi-holeで見る</a>`);
   }
-  return parts.length ? `<div class="activity">${parts.join('')}</div>` : '';
+  const lines = clients.map(clientLineHtml).join('');
+  if (!head.length && !lines) return '';
+  const headHtml = head.length ? `<div class="activity-head">${head.join('')}</div>` : '';
+  return `<div class="activity">${headHtml}${lines}</div>`;
 }
 
 function renderDomains() {
