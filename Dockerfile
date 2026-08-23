@@ -99,15 +99,21 @@ COPY --from=builder /pihole-monitor /usr/local/bin/pihole-monitor
 COPY --from=claude-cli /out/claude /usr/local/bin/claude
 
 # SQLiteと設定(トークン・CLIのホーム)の置き場。docker-compose.ymlでホスト側の
-# ディレクトリをマウントする。非rootのuid 1000で動かすため、マウント元も
-# uid 1000 が書ける必要がある(所有者合わせは compose の pihole-monitor-init が起動前に行う)
-RUN mkdir -p /data/state && chown -R 1000:1000 /data
+# ディレクトリをマウントする。非rootのuid 10001で動かすため、マウント元も
+# uid 10001 が書ける必要がある(所有者合わせは compose の pihole-monitor-init が起動前に行う)
+RUN mkdir -p /data/state && chown -R 10001:10001 /data
 
-# 名前つきユーザーは作らない。composeの user: で 1000 以外を指定できる設計なので、
+# **uid はホストに実在しない 10001**。1000 はホストの1人目のユーザーの番号なので、
+# それで動かすと万一コンテナから抜け出されたときに、そのユーザーのファイルを
+# 触れる立場になる。10001 ならホストの誰でもなく、chown で渡した data/ しか触れない。
+# 代わりに data/ の中身はホストから見て「知らないユーザー」の持ち物になるので、
+# 手元で直接編集したいホストでは `.env` の PIHOLE_MONITOR_UID に `id -u` を入れる
+#
+# 名前つきユーザーは作らない。composeの user: で 10001 以外を指定できる設計なので、
 # /etc/passwd に載っていないuidでも動く必要がある。CLIのホームはイメージに持たせない
 # —— uidが変えられる以上、固定のホームを作っても書けるとは限らない。アプリが
 # `$STATE_DIR/claude-home` を実行時に作り、子プロセスへ HOME として渡す
-USER 1000:1000
+USER 10001:10001
 
 EXPOSE 7060
 

@@ -51,7 +51,8 @@ docker compose pull && docker compose up -d
 戻したいときは `.env` に `PIHOLE_MONITOR_IMAGE=ghcr.io/rtcode337/pihole-monitor:sha-1234567`
 を書いて `docker compose up -d` する。
 
-データ（`data/`）に書き込むユーザーは既定で `1000:1000`。`id -u` が 1000 以外のホストでは
+データ（`data/`）に書き込むユーザーは既定で `10001:10001`（ホストに実在しない番号）。
+`data/` をホストから直接編集・書き戻ししたいときは
 `.env` に `PIHOLE_MONITOR_UID` / `PIHOLE_MONITOR_GID` を設定する。所有者合わせは起動前に
 `pihole-monitor-init` が自動でやるので、`chown` を手で打つ必要はない。
 
@@ -206,4 +207,4 @@ pihole-monitor/
 - 確認済み状態とメモはローカルDBのみで管理。Pi-holeを再インストールしても維持される
 - 以前のバージョンの `reviewed_domains` 表は、起動時に `domain_notes` へ自動で移行される（既存の行は確認済みとして扱う）
 - `claude setup-token` のトークンは長期間有効（発行時点の仕様では約1年）だが、失効した場合は次回の問い合わせ時に再入力が必要になる。**Chiezo経由を選んでいるあいだは不要**（鍵はChiezoが持っている）
-- コンテナは非rootユーザーで動く（既定 uid/gid 1000）。所有者合わせは起動前に `pihole-monitor-init` が行う
+- コンテナは非rootユーザーで動く（既定 uid/gid 10001）。所有者合わせは起動前に `pihole-monitor-init` が行う

@@ -984,7 +984,7 @@ pihole-monitor 枠で、**ホスト側とコンテナ内で同じ番号**にし�
 
 ### 実行ユーザーとデータディレクトリ
 
-コンテナは非rootユーザーで動く（イメージ内の既定は `node`、uid/gid 1000）。
+コンテナは非rootユーザーで動く（イメージ内の既定は uid/gid 10001）。
 マウント元のデータディレクトリが同じuidで書けないとDBを開けずに起動に失敗する。
 
 **所有者合わせは手作業ではなく、`pihole-monitor-init` サービスが起動前に行う。**
@@ -994,7 +994,7 @@ bindマウント先がホストに無くてDockerがroot所有で作った場合
 旧イメージのデータを引き継ぐ場合、バックアップから別の所有者で復元した場合の
 いずれもここで吸収される。
 
-`id -u` が1000以外のホストでは、`.env` の `PIHOLE_MONITOR_UID` / `PIHOLE_MONITOR_GID`
+`data/` をホストから直接編集したいときは、`.env` の `PIHOLE_MONITOR_UID` / `PIHOLE_MONITOR_GID`
 （standaloneは冒頭の `x-run-as`）で合わせる。**chown先と `user:` は同じ値を参照させること**
 （片方だけ直すと起動しなくなる）。
 

@@ -32,7 +32,7 @@ services:
       - ./data:/data
     # state/ にはトークンの設定DBとClaude CodeのCLIのホームが入る。
     # 先に作っておかないと、非rootの本体が作れずにトークンを保存できない
-    entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000} /data"]
+    entrypoint: ["sh", "-c", "mkdir -p /data/state && chown -R ${PIHOLE_MONITOR_UID:-10001}:${PIHOLE_MONITOR_GID:-10001} /data"]
     restart: "no"
 
   # 「AIに聞く」はこのコンテナが同梱のClaude CodeのCLIを起動する。
@@ -62,10 +62,12 @@ services:
     volumes:
       # 所有者は pihole-monitor-init が起動前に揃える
       - ./data:/data
-    # data/ に書かれるファイルをホストのユーザー所有にする。イメージ内の既定は
-    # uid/gid 1000。`id -u` が1000以外のホストでは
-    # `.env` の PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID で合わせる
-    user: "${PIHOLE_MONITOR_UID:-1000}:${PIHOLE_MONITOR_GID:-1000}"
+    # 実行ユーザー。**イメージ内の既定は uid/gid 10001** —— ホストに実在しない番号に
+    # しておくと、万一コンテナから抜け出されてもホストのユーザーのファイルには届かない。
+    # そのぶん data/ の中身はホストから見て「知らないユーザー」の持ち物になるので、
+    # 手元で直接編集・書き戻しをしたいホストでは `.env` の
+    # PIHOLE_MONITOR_UID / PIHOLE_MONITOR_GID に `id -u` / `id -g` を入れる
+    user: "${PIHOLE_MONITOR_UID:-10001}:${PIHOLE_MONITOR_GID:-10001}"
     # Chiezoがホストの公開ポート経由で届かないときだけ、次の1行と
     # ファイル末尾の networks: を有効にする(default も必ず並べる)
     #networks: [default, chiezo]
