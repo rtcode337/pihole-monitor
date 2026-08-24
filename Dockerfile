@@ -10,7 +10,7 @@
 # (`--platform=$BUILDPLATFORM` + `--target`)。QEMU での `cargo build` は極端に遅く、
 # rusqlite(SQLite本体)と ring(暗号)は C とアセンブラまで含むので、エミュレーションだと
 # 数十分かかる。クロスなら arm64 でも amd64 と同じ速さで出せる。
-FROM --platform=$BUILDPLATFORM rust:1.97.1-slim-trixie AS builder
+FROM --platform=$BUILDPLATFORM rust:1.98.0-slim-trixie AS builder
 ARG BUILDARCH
 ARG TARGETARCH
 
