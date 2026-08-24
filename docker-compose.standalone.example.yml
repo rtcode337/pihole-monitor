@@ -30,7 +30,9 @@
 # 消すと確認済みの仕分けとトークンが失われる。無ければDockerが自動作成するが、
 # 先に作っておくのが確実。所有者合わせは起動時に pihole-monitor-init がやるので、
 # `chown` を手で打つ必要はない。
-x-data-dir: &data-dir "/path/to/pihole-monitor/data"
+# 書式は「ホスト側の絶対パス:コンテナ側」。`type: bind` の長い形は使わない ——
+# 古い Docker だとホスト側のディレクトリを自動で作らない
+x-data-volume: &data-volume "/path/to/pihole-monitor/data:/data"
 
 # ---- ここだけ編集: 実行ユーザー ----
 # ホスト側でこのディレクトリを読み書きするユーザーの `id -u`:`id -g`。
@@ -91,9 +93,7 @@ services:
     container_name: pihole-monitor-init
     user: root
     volumes:
-      - type: bind
-        source: *data-dir
-        target: /data
+      - *data-volume
     entrypoint: ["sh", "-c", 'mkdir -p /data/state && chown -R "$$0" /data', *run-as]
     restart: "no"
 
@@ -107,9 +107,7 @@ services:
     ports:
       - "7060:7060"
     volumes:
-      - type: bind
-        source: *data-dir
-        target: /data
+      - *data-volume
     user: *run-as
     # Chiezoがホストの公開ポート経由で届かないときだけ、次の1行と
     # ファイル末尾の networks: を有効にする(default も必ず並べる)
