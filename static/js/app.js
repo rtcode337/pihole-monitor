@@ -203,17 +203,27 @@ function renderContext() {
   box.hidden = false;
 }
 
-// ブロック済みの一覧の前置き。1つの行に出どころの違う数字が並ぶので、そこを断る
+// ブロック済みの一覧の前置き。1つの行に出どころの違う数字が並ぶので、そこを断る。
+// アクセス元と期間は監視と同じ直近の窓しか見ていないので、そこも必ず断る ——
+// 件数（Pi-hole の集計）は全期間なので、断らないと「1,400件なのにアクセス元が空」が
+// 記録漏れに見える（実際は、この窓の中では1度も止められていないだけ）
 function blockedContextHtml(m) {
   const base = '<strong>件数</strong>は Pi-hole の集計（設定の「取り込む件数」ぶん）です。';
   if (!m.data_since) {
     return base + '<br><strong>アクセス元と期間</strong>は貯めたクエリから出しますが、'
       + 'まだ1件も貯まっていません（取り込みが済むと出ます）。';
   }
-  return base + `<br><strong>アクセス元と期間</strong>は、手元に貯まっている記録`
-    + `（${escapeHtml(shortTimeAt(m.data_since))} 以降）の中で、`
-    + `Pi-hole が止めたクエリだけを数えたものです。`
-    + `それより前のブロックは、件数に入っていても期間には出ません。`;
+  const hours = m.window_hours || 24;
+  // 貯まっている記録が窓より新しければ、実際に見えているのはそこまで
+  const short = m.since && m.data_since > m.since;
+  return base + `<br><strong>アクセス元と期間</strong>は、<strong>直近 ${hours} 時間</strong>`
+    + `（${escapeHtml(shortTimeAt(m.since))} 以降）に Pi-hole が止めたクエリだけを数えたものです。`
+    + `それより前のブロックは、件数に入っていても出ません（監視の候補と同じ窓なので、`
+    + `2つの一覧を並べて読めます）。`
+    + (short
+      ? `<br>ただし手元に貯まっているのは ${escapeHtml(shortTimeAt(m.data_since))} 以降だけなので、`
+        + `いま見えているのはその範囲です。`
+      : '');
 }
 
 // 「どうやって候補を選んでいるか」。畳んでおく（普段は前置きの数行だけ読めばよく、
@@ -307,8 +317,9 @@ function piholeQueryUrl(filter) {
   if (!listMeta || !listMeta.pihole_url || !filter) return '';
   const params = Object.entries(filter).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   if (!params.length) return '';
-  // 時間の範囲は監視のときだけ付く（応答に窓が入っているのはあちらだけ）。
-  // ブロック済みの一覧には窓が無いので、Pi-hole 側の既定の範囲で開く
+  // 時間の範囲は両方のモードで付く。ブロック済みの一覧も監視と同じ窓
+  // （直近24時間）でアクセス元と期間を出しているので、リンクの先も同じ範囲にする ——
+  // 画面に出ている期間とクエリログの中身が食い違うと、確かめに行った意味が無い
   if (listMeta.since) params.push(`from=${listMeta.since}`);
   if (listMeta.until) params.push(`until=${listMeta.until}`);
   return `${listMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
@@ -413,7 +424,7 @@ function clientLineHtml(c) {
 // 両方のモードで同じ形にする —— 「誰が・いつからいつまで」はどちらの一覧でも
 // 同じ問いに答えるものなので、片方だけ別の見せ方にすると読み替えが要る。
 // どの端末が引いたかは判断材料そのもの（PCが引くのと家電が引くのでは意味が違う）。
-// 範囲は前置きが断っている（監視は見ている窓、ブロック済みは手元に貯まっている記録）
+// 範囲はどちらも直近24時間で、前置きが断っている（監視は基準日時があればそこから）
 function activityHtml(d) {
   const clients = d.clients || [];
   // 印とクエリログへの入口はドメインの話なので、端末の行より前に固定して置く ——

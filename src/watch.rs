@@ -32,9 +32,11 @@ use serde::Serialize;
 
 use crate::db::{ClientActivity, Db};
 
-/// 基準日時が未設定のときに見る窓(秒)。初出もNXDOMAINもこの窓で数える。
+/// 既定で見る窓(秒)。初出もNXDOMAINもこの窓で数える。
+/// ブロック済みの一覧(`api::domains`)のアクセス元と期間も同じ窓を使う ——
+/// 2つの一覧を並べて読むので、窓が違うと同じ端末の見え方が食い違う。
 /// 長くすると候補が増えて読めなくなり、短くすると寝ている間の出来事を見落とす。
-const WINDOW_SECS: f64 = 24.0 * 3600.0;
+pub const WINDOW_SECS: f64 = 24.0 * 3600.0;
 
 /// 基準日時の置き場(`settings` 表のキー)。値は unix 秒。
 ///
