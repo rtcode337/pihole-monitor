@@ -30,6 +30,10 @@ pub struct AppState {
     /// Pi-hole の管理画面の URL。理由の札から絞り込んだクエリログへ飛ばすために、
     /// `/api/watch` の応答へそのまま載せる(開くのはブラウザなので、APIのURLとは別に持てる)
     pub pihole_web_url: String,
+    /// クエリログへのリンクに Pi-hole のセッションを付けるか(`PIHOLE_WEB_AUTO_LOGIN`)。
+    /// 判断はここに持ち、画面には出さない —— 画面から見ればリンク先は
+    /// どちらでも `/go/queries` の1本で、飛び方が変わるだけ
+    pub pihole_auto_login: bool,
 }
 
 pub fn router() -> Router<AppState> {

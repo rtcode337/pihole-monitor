@@ -308,6 +308,10 @@ function reviewedBadge(d) {
 }
 
 // Pi-hole のクエリログを絞り込んで開く URL（理由の札と、行の「Pi-holeで見る」）。
+// 飛び先は Pi-hole ではなく自分のところ（/go/queries）にする —— Pi-hole v6 は
+// 未ログインだとログイン画面へ送ったきり行き先を忘れるので、目的のページに着くのに
+// 2回押すことになる。サーバ側で先にセッションを付けられれば1回で着く（設定で決まるので、
+// ここは飛び方を知らないままでよい）。
 // パラメータ名は Pi-hole のものをサーバがそのまま返している（domain / client_ip /
 // type / reply）ので、ここは値をエンコードして並べるだけでよい —— 手ごとに違う絞り込み方
 // （種別なら type、NXDOMAIN なら reply）を画面側に散らかさない。
@@ -322,7 +326,7 @@ function piholeQueryUrl(filter) {
   // 画面に出ている期間とクエリログの中身が食い違うと、確かめに行った意味が無い
   if (listMeta.since) params.push(`from=${listMeta.since}`);
   if (listMeta.until) params.push(`until=${listMeta.until}`);
-  return `${listMeta.pihole_url}/admin/queries.lp?${params.join('&')}`;
+  return `/go/queries?${params.join('&')}`;
 }
 
 // AIに渡す「候補に挙げた理由」。画面に出している文をそのまま渡す ——

@@ -23,6 +23,7 @@ cp .env.example .env
 |--------|------|-----------|
 | `PIHOLE_BASE_URL` | Pi-holeのURL | `http://pihole:80` |
 | `PIHOLE_WEB_URL` | Pi-hole管理画面のURL（一覧からクエリログへ飛ぶのに使う。開くのはブラウザなので別に持てる） | `PIHOLE_BASE_URL`と同じ |
+| `PIHOLE_WEB_AUTO_LOGIN` | クエリログへのリンクにPi-holeのセッションを付ける（**1回のクリックで着く**。off だとPi-hole側がログイン画面へ送ったきり行き先を忘れるので2回押すことになる）。**この画面に届く人は誰でもPi-holeの管理セッションを取れる**ようになるので、閉じたLANで使うときだけonにする | `false` |
 | `PIHOLE_PASSWORD` | Pi-holeの管理パスワード | 空文字 |
 | `CHIEZO_BASE_URL` | [Chiezo](https://github.com/rtcode337/chiezo)（自分で立てる知識サーバー）のルートURL。入れると聞く相手を画面から選べる | 空文字（使わない） |
 | `CHIEZO_TIMEOUT` | Chiezo越しの生成1回のタイムアウト秒数 | `180` |

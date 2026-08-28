@@ -40,6 +40,17 @@ pub struct Config {
     /// コンテナの中からしか引けない名前(`http://pihole:80`)のままだと LAN の端末では開けない。
     /// 未設定なら `pihole_base_url` をそのまま使う(同じホストなら追加設定は要らない)。
     pub pihole_web_url: String,
+    /// クエリログへのリンクに Pi-hole のセッションを付けるか(既定は付けない)。
+    ///
+    /// Pi-hole v6 は行き先を覚えない —— 未ログインだと FTL が `/admin/login` へ送り、
+    /// ログイン後の飛び先はダッシュボード固定なので、絞り込みは捨てられて2回押すことになる。
+    /// 有効にすると `/go/queries` が sid を付けて飛ばし、1回で着く。
+    ///
+    /// 既定を off にしてあるのは、**この監視画面に届く人なら誰でも Pi-hole の管理
+    /// セッションを取れる**ことになるため。今は「クエリログが読める」止まりだが、
+    /// 有効にすると「設定も変えられる」に変わる。閉じた LAN で自分だけが開くなら
+    /// 有効にしてよい。
+    pub pihole_web_auto_login: bool,
     pub pihole_password: String,
     pub claude_timeout: Duration,
     pub db_path: PathBuf,
@@ -103,6 +114,7 @@ impl Config {
         Self {
             pihole_base_url,
             pihole_web_url,
+            pihole_web_auto_login: env_bool("PIHOLE_WEB_AUTO_LOGIN", false),
             pihole_password: env_string("PIHOLE_PASSWORD", ""),
             claude_timeout: Duration::from_secs(env_parse("CLAUDE_TIMEOUT", 60)),
             db_path: data_dir.join("monitor.db"),

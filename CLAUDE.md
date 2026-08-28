@@ -98,6 +98,7 @@ pihole-monitor/
 |--------|------|-----------|
 | `PIHOLE_BASE_URL` | Pi-holeのURL（末尾の`/`は落とす） | `http://pihole:80` |
 | `PIHOLE_WEB_URL` | Pi-hole**管理画面**のURL。監視の「理由」からクエリログへ飛ぶのに使う。**開くのはブラウザ**なのでAPIのURLとは別に持てる | `PIHOLE_BASE_URL`と同じ |
+| `PIHOLE_WEB_AUTO_LOGIN` | クエリログへのリンク（`/go/queries`）にセッション（sid）を付けるか。**onなら1回のクリックで絞り込み済みのページに着く**。offだとPi-hole側が行き先を忘れるので2回押すことになる。**既定をoffにしてあるのは、この監視画面に届く人が誰でもPi-holeの管理セッションを取れることになるため** | `false` |
 | `PIHOLE_PASSWORD` | Pi-holeの管理パスワード | 空文字 |
 | `CHIEZO_BASE_URL` | Chiezo（LAN内の知識サーバー）の**ルートURL**。`/v1`は付けない。空なら使わない | 空文字 |
 | `CHIEZO_TIMEOUT` | Chiezo越しの生成1回のタイムアウト秒数 | `180` |
@@ -194,6 +195,7 @@ settings (
 | GET | `/static/css/style.css` / `/static/js/app.js` | 埋め込んだCSS・JS |
 | GET | `/static/icon.svg` / `/static/icon-{32,180,192,512}.png` / `/favicon.ico` | アイコン（`/favicon.ico`は32pxのPNGを返す） |
 | GET | `/static/manifest.webmanifest` | Webアプリマニフェスト |
+| GET | `/go/queries` | Pi-holeのクエリログへ、絞り込みを付けて飛ばす（303）。`PIHOLE_WEB_AUTO_LOGIN`が有効ならsidも付ける。**呼ぶ側が混ぜたsidは落とす** |
 | GET | `/api/domains` | ブロック済みドメイン一覧（reviewed・noteフラグ付き）。**一覧そのものではなく`items` + どこまで見えているか**（`pihole_url` / `data_since` / `now`）を返す。各行に**アクセス元ごとの期間と件数**（`clients` = `client` / `count` / `active_from` / `active_to` の並び。ドメイン全体の期間も `active_from` / `active_to` で付く）が付く。Pi-hole取得失敗時は502 + `{"error": "pihole_unavailable"}` |
 | POST/DELETE | `/api/review` | `domains`（配列）を確認済みにする／未確認に戻す（**メモは残る**）。**`note`を渡したときだけメモも保存**する |
 | POST | `/api/note` | **メモだけ保存**（確認済みかどうかは変えない） |
@@ -441,6 +443,14 @@ HTTPで引き直すのは重いので、手元に写しを持つ。
   - リンク先は `PIHOLE_WEB_URL`（未設定なら`PIHOLE_BASE_URL`）+ `/admin/queries.lp`。
     **開くのはブラウザなのでAPIのURLとは別に持てる** —— `http://pihole:80` のような
     コンテナ内からしか引けない名前だとLANの端末では開けない
+  - **リンクは Pi-hole ではなく自分のところ（`/go/queries`）へ向ける**。
+    **Pi-hole v6 は行き先を覚えない** —— 未ログインだとFTLが`/admin/login`へ302で送り、
+    ログイン後の飛び先はダッシュボード固定（`login.js`の`redirect()`）なので、絞り込みは
+    捨てられて2回押すことになる。`PIHOLE_WEB_AUTO_LOGIN`が有効なら、飛ばす直前に
+    セッション（sid）を付ける —— **FTLはURLのsidでも認証を通し、応答でsidのcookieも配る**
+    ので、1回で着くうえ続きの画面遷移もログイン済みのまま進める。
+    **sidは取り直さずアプリのものを使い回す**（押すたびに`POST /api/auth`すると
+    同時セッションの枠を食い潰し、取り込みの認証まで`api_seats_exceeded`で止まる）
 - **どうやって候補を選んでいるかを画面から読めるようにする**（`methods()` →
   前置きの中の折りたたみ）。**説明はしきい値の定数から組み立てる** ——
   散文で書き写すと、定数をいじったときに説明だけが古くなる。

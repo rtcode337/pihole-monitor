@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
         pihole: PiholeClient::new(&config)?,
         // 画面から Pi-hole の管理画面へ飛ばすための URL(開くのはブラウザ)
         pihole_web_url: config.pihole_web_url.clone(),
+        pihole_auto_login: config.pihole_web_auto_login,
     };
 
     // DNSの取り込みは別タスクで回し続ける(画面の応答を待たせない)。

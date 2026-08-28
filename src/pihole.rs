@@ -152,6 +152,18 @@ impl PiholeClient {
         Ok(sid)
     }
 
+    /// 手元のセッション(sid)を外へ渡す。ブラウザを管理画面へログイン済みで
+    /// 着かせるためだけに使う(`/go/queries`)。
+    ///
+    /// **取り直さずに使い回す。** リンクを押すたびに `POST /api/auth` すると
+    /// 同時セッションの枠(既定16)をすぐ食い潰し、取り込みの認証まで
+    /// `api_seats_exceeded` で止まる —— 遡り取り込みで実際に踏んだのと同じ轍。
+    /// 画面から Pi-hole 側でログアウトされてこの sid が無効になっても、
+    /// 取り込みは 401 を見て取り直すので黙って直る。
+    pub async fn session_id(&self) -> Result<String> {
+        self.sid().await
+    }
+
     fn cached_sid(&self) -> Option<String> {
         self.session
             .lock()
