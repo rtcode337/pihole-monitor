@@ -92,6 +92,14 @@ function escapeHtml(str) {
 }
 
 async function loadDomains() {
+  // 「いま来ているもの」は取りに行く一覧を持たない（押してから流れてくる）。
+  // 更新ボタンや引っ張って更新で、積んだ行が消えないようにする
+  if (currentMode === 'live') {
+    renderContext();
+    updateStats();
+    renderDomains();
+    return;
+  }
   document.getElementById('domain-list').innerHTML = '<div class="loading">読み込み中...</div>';
   try {
     const resp = await fetch(currentMode === 'watch' ? '/api/watch' : '/api/domains');
@@ -164,6 +172,14 @@ async function postBaseline(at, message) {
 function renderContext() {
   const box = document.getElementById('list-context');
   const bar = document.getElementById('watch-baseline');
+  // 「いま来ているもの」の前置きは、一覧を取れているかではなく受信の状態で決まる
+  // （まだ1件も来ていない状態が普通の姿なので、listMeta が無くても出す）
+  if (currentMode === 'live') {
+    bar.hidden = true;
+    box.innerHTML = liveContextHtml();
+    box.hidden = false;
+    return;
+  }
   if (!listMeta) { box.hidden = true; bar.hidden = true; return; }
   const m = listMeta;
 
@@ -280,7 +296,9 @@ function updateStats() {
   // 3つ目の数字は意味が変わる。 ブロック済みでは「止めた総数」だが、
   // 監視では「挙がった候補の数」——同じラベルのままだと嘘になる
   document.getElementById('stat-total-label').textContent =
-    currentMode === 'watch' ? '怪しい候補' : 'ブロック総数';
+    currentMode === 'watch' ? '怪しい候補'
+    : currentMode === 'live' ? '流れた件数'
+    : 'ブロック総数';
 }
 
 function setFilter(filter, event) {
@@ -303,6 +321,15 @@ function filteredDomains() {
 // ブロック済みの行には reasons が無いので、そのときは何も出さない
 // 確認済みのバッジ。未確認の行には出さない —— 既読管理はしていないので
 // 「NEW」は嘘になる。未確認であることは左の赤い点で足りる
+// 同じドメインの行すべてに当てる。「いま来ているもの」は1件1行なので、
+// 同じドメインが何行も並ぶ —— 1行だけ書き換えると、確認済みにしたのに
+// 他の行が未確認のまま残る（同じドメインなのに状態が食い違って見える）
+function updateDomainRows(domain, patch) {
+  for (const item of allDomains) {
+    if (item.domain === domain) Object.assign(item, patch);
+  }
+}
+
 function reviewedBadge(d) {
   return d.reviewed ? '<span class="badge reviewed">確認済</span>' : '';
 }
@@ -463,6 +490,12 @@ function renderDomains() {
 
   if (filtered.length === 0) {
     renderSelection(filtered);
+    if (currentMode === 'live') {
+      list.innerHTML = liveRunning
+        ? '<div class="empty"><div class="empty-icon">&#9679;</div>受信中です。まだ何も止められていません</div>'
+        : '<div class="empty"><div class="empty-icon">&#9679;</div>「受信を始める」を押すと、そのときから先に止められた通信が流れます</div>';
+      return;
+    }
     list.innerHTML = currentMode === 'watch'
       ? '<div class="empty"><div class="empty-icon">&#10003;</div>いまの窓では、挙がった候補はありません</div>'
       : '<div class="empty"><div class="empty-icon">&#10003;</div>未確認のドメインはありません</div>';
@@ -515,6 +548,128 @@ function renderDomains() {
   // AIに聞いた・確認済みにした結果が詳細にも即座に映る（更新の呼び出しを散らさない）
   renderDetail();
 }
+
+// ---- いま来ているもの（押した時点から先のブロックを流す） ----
+//
+// 他の2つと性格が違う。あれは「集計」だが、これは「流れ」——
+// **押した瞬間から先**に Pi-hole が止めた通信を、1件1行で上へ積んでいく。
+// 同じドメイン・同じアクセス元でも、また来れば新しい行になる（数えてまとめない）。
+// まとめてしまうと「いま何度も鳴っている」が見えなくなり、この画面を作った意味が無い。
+//
+// 材料は貯めたクエリではなく Pi-hole をその場で叩いたもの（`/api/live`）——
+// 取り込みは数分おきなので、数分前の写しから「いま」は作れない。
+
+const LIVE_POLL_MS = 5000;   // 何秒おきに聞くか
+const LIVE_MAX_ROWS = 500;   // 画面に残す行数。超えたら古いほうから落とす（DOMが伸び続ける）
+
+let liveRunning = false;
+let liveTimer = null;
+let liveCursor = null;    // {after_id, since}。ここまでは受け取った、という位置
+let liveStartedAt = 0;    // 受信を始めた時刻（サーバの時計。unix秒）
+let liveStatus = '';      // 途切れたときの断り書き
+let liveDropped = 0;      // 画面から溢れて落とした行数
+
+function liveContextHtml() {
+  const started = liveStartedAt
+    ? `<strong>${escapeHtml(shortTimeAt(liveStartedAt))} 以降</strong>に Pi-hole が止めた通信`
+    : '<strong>押した時点から先</strong>に Pi-hole が止めた通信';
+  const button = liveRunning
+    ? '<button class="action-btn cancel-btn" onclick="stopLive(true)">受信を止める</button>'
+    : '<button class="action-btn ok-btn" onclick="startLive()">受信を始める</button>';
+  const state = liveRunning
+    ? '<span class="live-dot"></span>受信中'
+    : (liveStartedAt ? '停止中' : 'まだ始めていません');
+  const parts = [
+    `${started}を、来たものから1件ずつ並べます（${LIVE_POLL_MS / 1000} 秒おきに聞きます）。`
+    + '<strong>同じドメイン・同じアクセス元でも、来るたびに新しい行</strong>になります。',
+    '<strong>確認済みにしたドメインは流れてきません</strong>'
+    + '（調べて納得したものが流れ続けると、まだ見ていないものが埋もれます）。',
+  ];
+  if (liveDropped) {
+    parts.push(`<span class="watch-warn">画面に残すのは新しい ${LIVE_MAX_ROWS} 行までです`
+      + `（${liveDropped.toLocaleString()} 行は流れていきました）。</span>`);
+  }
+  if (liveStatus) parts.push(`<span class="watch-warn">${escapeHtml(liveStatus)}</span>`);
+  return `<div class="live-bar">${button}<span class="live-state">${state}</span></div>`
+    + parts.join('<br>');
+}
+
+// 受信を始める。まず「いまの位置」だけを聞き、そこから先を流す ——
+// 押す前に起きていたものまで出すと、「押したタイミングから」にならない
+async function startLive() {
+  stopLive();
+  allDomains = [];
+  liveDropped = 0;
+  liveStatus = '';
+  try {
+    const resp = await fetch('/api/live');
+    if (!resp.ok) throw new Error('start');
+    const body = await resp.json();
+    liveCursor = {after_id: body.after_id, since: body.since};
+    liveStartedAt = body.now;
+    // 行から Pi-hole のクエリログへ飛べるようにする。範囲は受信を始めた時刻から先
+    // （一覧と同じ組み立てを使うので、窓は listMeta に置く）
+    listMeta = {pihole_url: body.pihole_url, since: body.now, until: null};
+    liveRunning = true;
+    liveTimer = setInterval(pollLive, LIVE_POLL_MS);
+  } catch (e) {
+    liveStatus = 'Pi-hole に聞けませんでした。少し待ってからもう一度押してください';
+  }
+  updateStats();
+  renderContext();
+  renderDomains();
+}
+
+// 止める。積んだ行はそのまま残す（読んでいる途中で消えるほうが困る）
+function stopLive(redraw) {
+  liveRunning = false;
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  if (redraw) renderContext();
+}
+
+async function pollLive() {
+  if (!liveRunning || !liveCursor) return;
+  try {
+    const params = new URLSearchParams({after_id: liveCursor.after_id, since: liveCursor.since});
+    const resp = await fetch(`/api/live?${params}`);
+    if (!resp.ok) throw new Error('poll');
+    const body = await resp.json();
+    liveCursor = {after_id: body.after_id, since: body.since};
+    const items = body.items || [];
+    const hadStatus = liveStatus;
+    liveStatus = '';
+    if (items.length) {
+      // 新しいものが上。溢れたぶんは古いほうから落とす（落とした数は前置きに出す ——
+      // 黙って消すと、見ているものが全部だと思い込む）
+      allDomains = items.concat(allDomains);
+      if (allDomains.length > LIVE_MAX_ROWS) {
+        liveDropped += allDomains.length - LIVE_MAX_ROWS;
+        allDomains = allDomains.slice(0, LIVE_MAX_ROWS);
+      }
+      updateStats();
+      renderDomains();
+    }
+    // 前置きは変わったときだけ描き直す（毎周回だと、押そうとしたボタンが作り直される）
+    if (hadStatus || items.length) renderContext();
+  } catch (e) {
+    if (!liveStatus) {
+      liveStatus = '受信が途切れました（次の周回でやり直します）';
+      renderContext();
+    }
+  }
+}
+
+// 裏に回ったタブでは聞きに行かない。カーソルは持ったままなので、戻ったときに
+// その間のぶんもまとめて流れてくる（見ていない間のものが抜け落ちない）
+document.addEventListener('visibilitychange', () => {
+  if (!liveRunning) return;
+  if (document.hidden) {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  } else if (!liveTimer) {
+    liveTimer = setInterval(pollLive, LIVE_POLL_MS);
+    pollLive();
+  }
+});
 
 // ---- チェックした行の一括操作 ----
 
@@ -570,10 +725,7 @@ async function reviewSelected() {
     });
     const result = await resp.json();
     if (result.success) {
-      for (const domain of domains) {
-        const item = allDomains.find(d => d.domain === domain);
-        if (item) item.reviewed = true;
-      }
+      for (const domain of domains) updateDomainRows(domain, {reviewed: true});
       selectedDomains.clear();
       updateStats();
       renderDomains();
@@ -753,15 +905,12 @@ async function askOne(domain) {
   }
 
   if (result.success && result.research) {
-    const item = allDomains.find(d => d.domain === result.domain);
-    if (item) {
-      item.research = result.research;
-      item.researched_at = result.researched_at || '';
-      // メモが空だったときだけサーバが「ひとこと」を書いて返す。
-      // 調べた結果は詳細画面でしか読めないので、それだけだと一覧に何も残らない。
-      // 既にメモがあれば `note` は来ない（人の判断を上書きしないのはサーバ側の決まり）
-      if (result.note) item.note = result.note;
-    }
+    const patch = {research: result.research, researched_at: result.researched_at || ''};
+    // メモが空だったときだけサーバが「ひとこと」を書いて返す。
+    // 調べた結果は詳細画面でしか読めないので、それだけだと一覧に何も残らない。
+    // 既にメモがあれば `note` は来ない（人の判断を上書きしないのはサーバ側の決まり）
+    if (result.note) patch.note = result.note;
+    updateDomainRows(result.domain, patch);
     renderDomains();
     // 調べ終わったら詳細を開く。 30秒待たせておいて結果をどこにも出さないと、
     // 押した人は何が起きたのか分からない（開いていれば renderDetail が描き直す）
@@ -825,11 +974,10 @@ async function askFollowup() {
   }
 
   if (result.success && result.research) {
-    const item = allDomains.find(d => d.domain === result.domain);
-    if (item) {
-      item.research = result.research;
-      item.researched_at = result.researched_at || '';
-    }
+    updateDomainRows(result.domain, {
+      research: result.research,
+      researched_at: result.researched_at || '',
+    });
     // 聞けたら入力欄は空にする（同じ質問をもう一度投げないため）
     followupDraft = '';
     renderDomains();
@@ -994,8 +1142,7 @@ async function runBulkAsk() {
       for (const name of result.authors || []) authors.add(name);
       for (const message of result.failures || []) bulkLog(message, 'failed');
       for (const entry of result.results) {
-        const item = allDomains.find(d => d.domain === entry.domain);
-        if (item) item.note = entry.note;
+        updateDomainRows(entry.domain, {note: entry.note});
         saved++;
         bulkLog(`${entry.domain} — ${entry.note}`, 'done');
       }
@@ -1279,7 +1426,7 @@ async function saveToken() {
 // 押した覚えの無い切り替わり方で、しかも一覧が似ているので気づきにくい。
 // 知らない値はそれぞれ既定に倒す —— 白い画面を出さない
 const PAGES = ['domains', 'settings'];
-const MODES = ['blocked', 'watch'];
+const MODES = ['blocked', 'watch', 'live'];
 let currentPage = 'domains';
 
 function routeFromHash() {
@@ -1314,6 +1461,9 @@ function applyRoute(initial) {
   for (const mode of MODES) {
     document.getElementById(`mode-${mode}`).classList.toggle('active', mode === currentMode);
   }
+  // 「いま来ているもの」から離れたら受信を止める。 見ていない画面のために
+  // Pi-hole を数秒おきに叩き続ける理由が無い（戻ったら押し直す）
+  if (!(currentPage === 'domains' && currentMode === 'live')) stopLive();
   if (modeChanged && !initial) loadDomains();
   // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになるし、
   // Chiezoを後から起動した場合に、画面を読み直さなくても相手が出てくる
@@ -1795,8 +1945,7 @@ async function markReviewed(domain) {
     });
     const result = await resp.json();
     if (result.success) {
-      const item = allDomains.find(d => d.domain === domain);
-      if (item) item.reviewed = true;
+      updateDomainRows(domain, {reviewed: true});
       updateStats();
       renderDomains();
       showToast(`${domain} を確認済みにしました`, 'success');
@@ -1817,8 +1966,7 @@ async function unmarkReviewed(domain) {
     });
     const result = await resp.json();
     if (result.success) {
-      const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = false; item.note = ''; }
+      updateDomainRows(domain, {reviewed: false, note: ''});
       updateStats();
       renderDomains();
       showToast(`${domain} を未確認に戻しました`, 'success');
@@ -1849,8 +1997,7 @@ async function saveNote(domain, note, successMessage) {
     });
     const result = await resp.json();
     if (result.success) {
-      const item = allDomains.find(d => d.domain === domain);
-      if (item) item.note = note;
+      updateDomainRows(domain, {note: note});
       renderDomains();
       showToast(successMessage, 'success');
       return true;
@@ -1876,8 +2023,7 @@ async function submitReview() {
     });
     const result = await resp.json();
     if (result.success) {
-      const item = allDomains.find(d => d.domain === domain);
-      if (item) { item.reviewed = true; item.note = note; }
+      updateDomainRows(domain, {reviewed: true, note: note});
       updateStats();
       renderDomains();
       showToast(`${domain} を確認済みにしました`, 'success');

@@ -71,6 +71,9 @@
 <div class="modebar">
   <a class="mode-btn active" id="mode-blocked" href="#domains/blocked">ブロック済み</a>
   <a class="mode-btn" id="mode-watch" href="#domains/watch">未ブロックの監視</a>
+  <!-- 3つ目だけ性格が違う。集計ではなく「流れ」で、押した時点から先に止められた
+       通信が1件1行で積まれる（同じドメインでも来るたびに新しい行になる） -->
+  <a class="mode-btn" id="mode-live" href="#domains/live">いま来ているもの</a>
 </div>
 
 <!-- 一覧の前置き。「どこまで見えているか」を必ず添える ——

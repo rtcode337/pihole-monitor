@@ -290,6 +290,39 @@ header h1 span { color: var(--c-text); }
 .watch-baseline input:focus { outline: none; border-color: var(--c-blue); }
 .watch-qtypes { color: var(--c-dim); }
 
+/* 「いま来ているもの」の開始・停止。前置きの中に置く ——
+   受信の状態と、何が流れてくるのかの断りは同じ塊で読ませたい */
+.live-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.live-state { color: var(--c-muted); }
+
+/* 受信中の目印。動かすのは1点だけにする —— 流れてくる行のほうが主役なので、
+   目印まで派手だと、どこを見ればよいのか分からなくなる */
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--c-red);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* 動きを減らす設定にしている端末では点滅させない（状態は文字で読める） */
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
 /* 候補が挙がった理由。手ごとに色を変える —— 同じ見た目だと、
    「新しく見ただけ」と「トンネリングの疑い」が並んで同じ重さに見える */
 .reasons {

@@ -18,7 +18,7 @@ use crate::ai::{
 };
 use crate::db::{ClientActivity, Db};
 use crate::diag::Event as DiagEvent;
-use crate::pihole::PiholeClient;
+use crate::pihole::{PiholeClient, QueryRecord};
 
 /// ハンドラ間で共有する依存。いずれも中身は `Arc` か `Clone` が安いものなので、
 /// axumがリクエストごとにcloneしても問題ない。
@@ -67,6 +67,8 @@ pub fn router() -> Router<AppState> {
         // アクセス元(端末)ごとの日ごとの件数。設定のページが読む ——
         // 一覧は「どのドメインか」で並んでいるので、「どの端末が喋っているか」は
         // ここでしか見られない(ルーター経由に化けている割合の推移もここで追う)
+        // 「いま来ているもの」。画面が数秒おきに呼ぶので、口はこれ1つ(カーソル付き)
+        .route("/api/live", get(live))
         .route("/api/clients", get(clients_get))
         // メモ・確認済みが残っているドメインの控え。設定のページが読む ——
         // 2つの一覧はどちらも「いま出ているもの」しか並べないので、
@@ -549,6 +551,193 @@ async fn domains(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
+/// 「いま来ているもの」で1回に引く上限。画面は数秒おきに呼ぶので1回ぶんはこれで足りる。
+/// あふれるほど来ている間は古いぶんから落ちる —— **流れを見る画面なので、
+/// 取りこぼさないことより追いつき続けることを優先する**(貯める側は `ingest.rs` が別に持つ)。
+const LIVE_MAX_ROWS: i64 = 500;
+
+/// 取りに行く窓を巻き戻す幅(秒)。Pi-hole 側の記録は時刻順に確定するとは限らないので、
+/// 境界ぴったりで切ると取りこぼす。重なったぶんは id で弾く(`ingest.rs` と同じ考え方で、
+/// こちらは数秒おきに呼ぶぶん幅を小さくしてある)。
+const LIVE_OVERLAP_SECS: f64 = 5.0;
+
+/// 「いま来ているもの」の1行。
+///
+/// ドメイン一覧の行(`DomainEntry`)と同じ項目を持たせてある —— 画面は同じ体裁で描くので、
+/// 材料も同じ形で渡す。違うのは **1件のクエリが1行**であることで、同じドメイン・
+/// 同じアクセス元でも、また来れば新しい行になる(数えて1行にまとめない)。
+#[derive(Serialize)]
+struct LiveEntry {
+    /// Pi-hole のクエリ id。行を見分ける鍵はこれ —— ドメインは重複しうる
+    id: i64,
+    /// この通信の時刻(unix秒)
+    ts: i64,
+    domain: String,
+    /// 常に1。1行が1件なので数えるものが無いが、画面が同じ体裁で描けるように持たせる
+    count: u32,
+    /// 常にfalse。未確認だけを流すので、確認済みになったドメインは次から出てこない
+    reviewed: bool,
+    note: String,
+    research: String,
+    researched_at: String,
+    /// その通信を出した1台だけ。一覧のように「件数の多い順に何台も」ではない
+    clients: Vec<ClientActivity>,
+    active_from: i64,
+    active_to: i64,
+}
+
+#[derive(Deserialize)]
+struct LiveQuery {
+    /// ここまでは受け取った、というPi-holeのクエリid
+    #[serde(default)]
+    after_id: Option<i64>,
+    /// 同じく時刻(unix秒)。取りに行く窓の起点になる
+    #[serde(default)]
+    since: Option<f64>,
+}
+
+/// 押した時点から先の、未確認のブロックを1件ずつ流す。
+///
+/// **画面が数秒おきに呼ぶ**。カーソル(`after_id` / `since`)を渡さない初回は、
+/// いまの先頭を返すだけで行は流さない —— これで「押したときから先」になる。
+///
+/// 貯めたクエリ(`dns_queries`)ではなくPi-holeをその場で叩くのは、取り込みが
+/// 数分おきだから。リアルタイムに見せるものを、数分前の写しから作ることはできない。
+async fn live(State(state): State<AppState>, Query(q): Query<LiveQuery>) -> Response {
+    let now = unix_now();
+    let (after_id, since) = match (q.after_id, q.since) {
+        (Some(after_id), Some(since)) => (after_id, since),
+        // 初回。いまの先頭をカーソルとして返す(1件も無ければ「いま」から)
+        _ => {
+            return match state.pihole.latest_blocked().await {
+                Ok(cursor) => {
+                    // 1件も無いときは -1 から。Pi-hole の id は 0 始まりなので、
+                    // 0 を起点にすると最初の1件が流れてこない
+                    let (after_id, since) = cursor.unwrap_or((-1, now));
+                    Json(json!({
+                        "items": [],
+                        "after_id": after_id,
+                        "since": since,
+                        "now": now as i64,
+                        // 行から Pi-hole のクエリログへ飛ぶために渡す(一覧と同じ)
+                        "pihole_url": state.pihole_web_url,
+                    }))
+                    .into_response()
+                }
+                Err(e) => pihole_unavailable(e, "最後のブロックを取得できない"),
+            };
+        }
+    };
+
+    let records = match state
+        .pihole
+        .blocked_queries_since(since - LIVE_OVERLAP_SECS, LIVE_MAX_ROWS)
+        .await
+    {
+        Ok(records) => records,
+        Err(e) => return pihole_unavailable(e, "ブロックされたクエリを取得できない"),
+    };
+
+    let batch = live_batch(&records, after_id, since, now);
+
+    let known = match state.db.records().await {
+        Ok(known) => known,
+        Err(e) => return internal_error(e, "ドメインの記録を読み出せない"),
+    };
+
+    let items: Vec<LiveEntry> = batch
+        .fresh
+        .iter()
+        .filter_map(|r| {
+            let record = known.get(&r.domain);
+            // 確認済みのドメインは流さない。「調べて納得した」ものが延々と流れてくると、
+            // まだ見ていないものが埋もれる
+            if record.is_some_and(|rec| rec.reviewed) {
+                return None;
+            }
+            let ts = r.ts as i64;
+            Some(LiveEntry {
+                id: r.id,
+                ts,
+                domain: r.domain.clone(),
+                count: 1,
+                reviewed: false,
+                note: record.map(|rec| rec.note.clone()).unwrap_or_default(),
+                research: record.map(|rec| rec.research.clone()).unwrap_or_default(),
+                researched_at: record.map(|rec| rec.researched_at.clone()).unwrap_or_default(),
+                clients: vec![ClientActivity {
+                    client: r.client.clone(),
+                    count: 1,
+                    active_from: ts,
+                    active_to: ts,
+                }],
+                active_from: ts,
+                active_to: ts,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "items": items,
+        "after_id": batch.after_id,
+        "since": batch.since,
+        "now": now as i64,
+        "pihole_url": state.pihole_web_url,
+    }))
+    .into_response()
+}
+
+/// 1周ぶんの仕分け。**まだ流していないぶん**と、次に渡すカーソル。
+struct LiveBatch<'a> {
+    /// 新しい順。同じ秒に並んだものは id の大きいほうを新しいとみなす
+    fresh: Vec<&'a QueryRecord>,
+    after_id: i64,
+    since: f64,
+}
+
+/// 受け取ったぶんから、まだ流していないものとカーソルを決める。
+///
+/// 通常は id で切る。ただし **Pi-hole の DB が作り直されると id が振り直される**ので
+/// (`ingest.rs` と同じ話)、巻き戻っているときだけ時刻で切る —— そのままだと新しい行が
+/// 「見たことのある id」として弾かれ続け、静かに止まる。
+///
+/// カーソルは**見えたところまで**進める。確認済みで画面に出さないぶんも「見た」——
+/// 出さないものでカーソルを止めると、毎回同じものを引き直すことになる。
+/// 1件も無いときは窓を「いま」の手前まで畳む(窓が伸び続けて応答が重くなるのを防ぐ)。
+fn live_batch<'a>(
+    records: &'a [QueryRecord],
+    after_id: i64,
+    since: f64,
+    now: f64,
+) -> LiveBatch<'a> {
+    let newest_id = records.iter().map(|r| r.id).max().unwrap_or(after_id);
+    let rolled_back = newest_id < after_id;
+    if rolled_back {
+        tracing::warn!(after_id, newest_id, "Pi-hole の id が巻き戻っている。時刻で拾い直す");
+    }
+
+    let mut fresh: Vec<&QueryRecord> = records
+        .iter()
+        .filter(|r| if rolled_back { r.ts > since } else { r.id > after_id })
+        .collect();
+    fresh.sort_by(|a, b| b.ts.total_cmp(&a.ts).then(b.id.cmp(&a.id)));
+
+    let newest_ts = records.iter().map(|r| r.ts).fold(f64::MIN, f64::max);
+    LiveBatch {
+        fresh,
+        after_id: if rolled_back {
+            newest_id
+        } else {
+            newest_id.max(after_id)
+        },
+        since: if newest_ts > f64::MIN {
+            newest_ts
+        } else {
+            now - LIVE_OVERLAP_SECS
+        },
+    }
+}
+
 /// アクセス元の内訳で出す日数の既定。2週間あれば「先週と比べて減ったか」が読める。
 const CLIENT_DAYS_DEFAULT: i64 = 14;
 
@@ -996,6 +1185,16 @@ fn bad_gateway(message: &str) -> Response {
 }
 
 /// 内部エラーは詳細をログにだけ残し、画面には短いメッセージを返す。
+/// Pi-hole に届かなかったときの応答。画面は `error` の値を見て「取得に失敗」と出す。
+fn pihole_unavailable(error: anyhow::Error, message: &str) -> Response {
+    tracing::error!(error = ?error, "{message}");
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({ "error": "pihole_unavailable" })),
+    )
+        .into_response()
+}
+
 fn internal_error(error: anyhow::Error, message: &str) -> Response {
     tracing::error!(error = ?error, "{message}");
     (
@@ -1004,3 +1203,56 @@ fn internal_error(error: anyhow::Error, message: &str) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(id: i64, ts: f64) -> QueryRecord {
+        QueryRecord {
+            id,
+            ts,
+            domain: format!("d{id}.example"),
+            client: "192.0.2.1".to_string(),
+            qtype: "A".to_string(),
+            status: "GRAVITY".to_string(),
+            reply: None,
+            upstream: Some("blocklist".to_string()),
+            cname: None,
+        }
+    }
+
+    #[test]
+    fn live_batch_returns_only_what_has_not_been_streamed_newest_first() {
+        let records = [record(10, 100.0), record(12, 102.0), record(11, 101.0)];
+        let batch = live_batch(&records, 10, 100.0, 200.0);
+        assert_eq!(
+            batch.fresh.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![12, 11]
+        );
+        assert_eq!(batch.after_id, 12);
+        assert_eq!(batch.since, 102.0);
+    }
+
+    #[test]
+    fn live_batch_falls_back_to_time_when_the_ids_rolled_back() {
+        // Pi-hole の DB が作り直された後。id は小さいが、時刻は進んでいる
+        let records = [record(1, 300.0), record(2, 301.0)];
+        let batch = live_batch(&records, 9_999, 299.0, 400.0);
+        assert_eq!(
+            batch.fresh.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        // カーソルも巻き戻す(そうしないと、この先ずっと何も流れてこない)
+        assert_eq!(batch.after_id, 2);
+    }
+
+    #[test]
+    fn live_batch_folds_the_window_when_nothing_arrived() {
+        let batch = live_batch(&[], 42, 100.0, 500.0);
+        assert!(batch.fresh.is_empty());
+        assert_eq!(batch.after_id, 42);
+        assert_eq!(batch.since, 500.0 - LIVE_OVERLAP_SECS);
+    }
+}
+

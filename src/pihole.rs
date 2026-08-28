@@ -250,6 +250,50 @@ impl PiholeClient {
         Ok(counts)
     }
 
+    /// `since` 以降に**ブロックされた**クエリを新しい順に、1回ぶんだけ。
+    ///
+    /// 「いま来ているもの」(`/api/live`)が数秒おきに呼ぶ。ページは送らない ——
+    /// 1回で取り切れなかったぶんは、次の周回が id の続きから拾えば足りる。
+    /// ブロックされたぶんの選び方(`upstream=blocklist`)は `blocked_domains` と同じ ——
+    /// **一覧と流れているものが同じ定義でないと、片方にしか出ないものができる**。
+    pub async fn blocked_queries_since(&self, since: f64, limit: i64) -> Result<Vec<QueryRecord>> {
+        let resp: QueriesResponse = self
+            .get_json(
+                "/api/queries",
+                &[
+                    ("upstream", "blocklist".to_string()),
+                    ("from", format!("{:.0}", since.max(0.0))),
+                    ("length", limit.to_string()),
+                ],
+                "ブロックされたクエリ",
+            )
+            .await?;
+        Ok(resp.queries.into_iter().filter_map(record_of).collect())
+    }
+
+    /// いま最後にブロックされたクエリ(id と時刻)。1件も無ければ `None`。
+    ///
+    /// 「いま来ているもの」を**押した時点から**始めるために使う。ここを起点にすれば、
+    /// 押す前に起きていたものは流れてこない。
+    pub async fn latest_blocked(&self) -> Result<Option<(i64, f64)>> {
+        let resp: QueriesResponse = self
+            .get_json(
+                "/api/queries",
+                &[
+                    ("upstream", "blocklist".to_string()),
+                    ("length", "1".to_string()),
+                ],
+                "最後のブロック",
+            )
+            .await?;
+        Ok(resp
+            .queries
+            .into_iter()
+            .filter_map(record_of)
+            .map(|r| (r.id, r.ts))
+            .next())
+    }
+
     /// `since` 以降のクエリを新しい順に取り込む(ページを送って集める)。
     ///
     /// 窓は少し重ねて渡すこと(呼び出し側が `since` を巻き戻す)。Pi-hole 側の記録は
