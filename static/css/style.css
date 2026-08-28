@@ -533,16 +533,6 @@ a.reason-link:hover {
 .watch-method-how { margin-top: 2px; line-height: 1.7; }
 .watch-method-caveat { color: var(--c-dim); line-height: 1.7; }
 
-.toolbar {
-  padding: 0 32px;
-  margin-bottom: 16px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  /* 狭い画面では折り返させる —— はみ出させると画面の外に隠れて気づけない */
-  flex-wrap: wrap;
-}
-
 .refresh-btn {
   margin-left: auto;
   padding: 6px 14px;
@@ -558,7 +548,10 @@ a.reason-link:hover {
 
 .refresh-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
-/* チェックした行の一括操作のバー */
+/* チェックした行の一括操作と、一覧そのものへの操作（まとめて聞く・更新）のバー。
+   後者は右へ回す（`.bulk-btn` の margin-left: auto）——
+   左は「選んだものに何をするか」、右は「一覧に何をするか」で、働きが違う。
+   狭い画面では折り返させる —— はみ出させると画面の外に隠れて気づけない */
 .select-bar {
   padding: 0 32px;
   margin-bottom: 12px;
@@ -1007,8 +1000,10 @@ a.reason-link:hover {
   border: 1px solid var(--c-border-strong);
   border-radius: 8px;
   padding: 24px;
-  width: 480px;
-  max-width: 90vw;
+  /* 広い画面では広く使う。 480px 固定だった頃は、調査結果もエラーの原文も
+     数文字ごとに折り返して読むところが縦に伸びていた —— 画面は空いているのに
+     読みにくい、が一番損。狭い画面では今までどおり画面幅に合わせる */
+  width: min(760px, 92vw);
   /* 中身が画面より高くなったらモーダルごとスクロールさせる。
      覆いは flex で中央寄せなので、これが無いと上下がはみ出して読めないまま
      手も出せない（メモや調査結果が長いと実際にそうなっていた）。
@@ -1018,13 +1013,49 @@ a.reason-link:hover {
   overflow-y: auto;
 }
 
+/* 見出しの行。 中身が長いモーダルでも×が隠れないよう、上に貼り付けておく ——
+   絶対配置にすると、スクロールした先で閉じる場所が無くなる。
+   上へ 24px 戻して同じだけ内側に取り、モーダルの余白ぶん背景を横いっぱいに敷く */
+/* 詳細だけはさらに広く。 調査結果は見出し付きで何十行にもなるので、
+   幅が足りないぶんはそのまま縦に伸びる（読む量は変わらないのに、めくる回数だけ増える） */
+#detail-modal .modal { width: min(1040px, 94vw); }
+
 .modal-title {
+  position: sticky;
+  top: -24px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--c-surface);
+  margin: -24px -24px 8px;
+  padding: 24px 24px 8px;
   font-size: 11px;
   color: var(--c-muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  margin-bottom: 8px;
 }
+
+/* 右上の×。 覆いを押す・Escで閉じるのは残したまま、押す場所を目に見える形で置く */
+.modal-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin: -6px -6px -6px 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-muted);
+  font-family: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.modal-close:hover { background: var(--c-border); color: var(--c-text); }
+.modal-close:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 
 .modal-domain {
   font-size: 14px;
@@ -1466,7 +1497,6 @@ a.reason-link:hover {
   .stats { padding: 0 14px; margin: 16px 0; }
   .stat { padding: 10px 10px; }
   .stat-value { font-size: 22px; }
-  .toolbar { padding: 0 14px; }
   .modebar { padding: 0 14px; }
   .list-context { margin: 0 14px 12px; }
   .watch-baseline { padding: 0 14px; }

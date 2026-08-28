@@ -194,7 +194,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    B1["まとめてAIに聞く<br/>（ツールバー）"] --> ASK["/api/ask"]
+    B1["まとめてAIに聞く<br/>（一覧の上のバー）"] --> ASK["/api/ask"]
     B2["詳しく調べる<br/>（行のボタン）"] --> INV["/api/investigate"]
 
     ASK --> ALL["チェックした全員<br/>10件ずつ・1〜2文・webなし"]
