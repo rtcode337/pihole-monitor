@@ -37,43 +37,50 @@
   <div class="logo"></div>
   <h1>Pi-hole <span>Monitor</span></h1>
   <!-- ページの切り替え。リンク（`#`）にしてある —— 戻る/進むもブックマークも
-       そのまま効く（JSでボタンを押し替える作りだと、どちらも効かない） -->
+       そのまま効く（JSでボタンを押し替える作りだと、どちらも効かない）。
+       止められたものと素通りしたものはページごと分ける —— 材料も判定も違うので、
+       同じ一覧の中のタブにすると「絞り込みの一種」に見える -->
   <nav class="pagenav">
-    <a class="page-btn" id="page-btn-domains" href="#domains">ドメイン</a>
+    <a class="page-btn" id="page-btn-blocked" href="#blocked">ブロック済み</a>
+    <a class="page-btn" id="page-btn-unblocked" href="#unblocked">未ブロック</a>
     <a class="page-btn" id="page-btn-settings" href="#settings">設定</a>
   </nav>
   <!-- 中身（太陽/月）は app.js が入れる。押すと切り替わる先の印を出す -->
   <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" aria-label="テーマを切り替える"></button>
 </header>
 
-<!-- ドメインのページ。ヘッダーの「ドメイン / 設定」で入れ替える -->
-<div id="page-domains">
+<!-- 一覧のページ（ブロック済み・未ブロックで共用）。ヘッダーで入れ替える ——
+     行の作り・フィルター・選択・AIに聞く操作はどちらも同じなので、
+     器は1つにして中身（どの一覧を出すか）だけをモードで切り替える -->
+<div id="page-list">
 
+<!-- 件数の面がそのまま絞り込みの入口。 別にボタンを並べていた頃は、同じことを言う
+     ものが上下に2つあった（数字を見てから押す先は結局この3つ）。
+     押せることは、いま選んでいる面を塗って示す（app.js が active を付け替える） -->
 <div class="stats">
-  <div class="stat">
+  <button class="stat active" id="filter-new" onclick="setFilter('new')" aria-pressed="true">
     <div class="stat-value alert" id="stat-new">-</div>
     <div class="stat-label">未確認</div>
-  </div>
-  <div class="stat">
+  </button>
+  <button class="stat" id="filter-reviewed" onclick="setFilter('reviewed')" aria-pressed="false">
     <div class="stat-value ok" id="stat-reviewed">-</div>
     <div class="stat-label">確認済み</div>
-  </div>
-  <div class="stat">
+  </button>
+  <!-- 3つ目は「全部」。ラベルはモードで変わる（ブロック総数 / 怪しい候補 / 流れた件数） -->
+  <button class="stat" id="filter-all" onclick="setFilter('all')" aria-pressed="false">
     <div class="stat-value" id="stat-total">-</div>
     <div class="stat-label" id="stat-total-label">ブロック総数</div>
-  </div>
+  </button>
 </div>
 
-<!-- 上段のタブ。2つの画面は材料も判定も違う ——
-     ブロック済みはPi-holeをその場で叩いた集計、監視は貯めた過去との突き合わせ。
-     ヘッダーのページ切り替えと同じくリンク（`#domains/<モード>`）にしてある ——
-     JSの変数だけで持っていた頃は、読み直すとブロック済みへ戻っていた -->
-<div class="modebar">
-  <a class="mode-btn active" id="mode-blocked" href="#domains/blocked">ブロック済み</a>
-  <a class="mode-btn" id="mode-watch" href="#domains/watch">未ブロックの監視</a>
-  <!-- 3つ目だけ性格が違う。集計ではなく「流れ」で、押した時点から先に止められた
-       通信が1件1行で積まれる（同じドメインでも来るたびに新しい行になる） -->
-  <a class="mode-btn" id="mode-live" href="#domains/live">いま来ているもの</a>
+<!-- ブロック済みのページの中のタブ。どちらも「止められたドメイン」だが、
+     見せ方が違う —— 全件サマリはPi-holeの集計、1件ずつ流すのは受信を始めてから先の流れ。
+     ヘッダーのページ切り替えと同じくリンク（`#blocked/<モード>`）にしてある ——
+     JSの変数だけで持っていた頃は、読み直すと全件サマリへ戻っていた。
+     未ブロックのページは一覧が1つしか無いので、この段ごと隠す（app.jsが出し分ける） -->
+<div class="modebar" id="modebar">
+  <a class="mode-btn active" id="mode-summary" href="#blocked/summary">全件サマリ</a>
+  <a class="mode-btn" id="mode-live" href="#blocked/live">1件ずつ流す</a>
 </div>
 
 <!-- 一覧の前置き。「どこまで見えているか」を必ず添える ——
@@ -92,13 +99,9 @@
   <button class="action-btn cancel-btn" onclick="clearBaseline()" title="既定の窓（直近24時間）に戻す">解除</button>
 </div>
 
+<!-- 絞り込みは上の件数の面が受け持つ。ここに残すのは一覧そのものへの操作だけ -->
 <div class="toolbar">
-  <button class="filter-btn active" onclick="setFilter('new', event)">未確認</button>
-  <button class="filter-btn" onclick="setFilter('reviewed', event)">確認済み</button>
-  <button class="filter-btn" onclick="setFilter('all', event)">すべて</button>
-  <!-- いま聞く相手の名前をそのままボタンにする。「どのAIが答えるのか」を
-       押す前に知りたいので、名前を隠して歯車だけにはしない。
-       右端の3つは「相手 → まとめて聞く → 更新」の順（設定 → 実行 → 読み直し） -->
+  <!-- 「まとめて聞く → 更新」の順（実行 → 読み直し）。聞く相手は設定のページで選ぶ -->
   <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
@@ -119,7 +122,7 @@
   <div class="loading">読み込み中...</div>
 </div>
 
-</div><!-- /page-domains -->
+</div><!-- /page-list -->
 
 <!-- 設定のページ。モーダルではなくページにしてある ——
      ping / 経路の結果は数十行になるので、一覧に重ねると読むところが狭い -->

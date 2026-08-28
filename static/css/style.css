@@ -142,7 +142,7 @@ header h1 {
 
 header h1 span { color: var(--c-text); }
 
-/* ヘッダーのページ切り替え（ドメイン / 設定）。タブではなくリンクなので、
+/* ヘッダーのページ切り替え（ブロック済み / 未ブロック / 設定）。タブではなくリンクなので、
    見た目だけボタンにそろえる（下線は消す） */
 .pagenav {
   display: flex;
@@ -190,10 +190,28 @@ header h1 span { color: var(--c-text); }
   border-bottom: 1px solid var(--c-border);
 }
 
+/* 件数の面がそのまま絞り込みの切り替え。 見た目は数字の面のままにする ——
+   ボタンらしく飾ると、上段に操作の列がもう1本あるように見える */
 .stat {
   flex: 1;
-  padding: 16px 24px;
+  padding: 14px 24px;
   background: var(--c-bg);
+  border: none;
+  /* 選んでいる面は上辺で示す。 透明な線を全部に敷いておく ——
+     選んだときだけ線を足すと、その面だけ2px下にずれる */
+  border-top: 2px solid transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.stat:hover { background: var(--c-surface); }
+.stat:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+
+.stat.active {
+  background: var(--c-surface);
+  border-top-color: var(--c-text-strong);
 }
 
 .stat-value {
@@ -214,9 +232,10 @@ header h1 span { color: var(--c-text); }
   text-transform: uppercase;
 }
 
-/* 上段のタブ。ブロック済み / 未ブロックの監視 を切り替える。
+/* ブロック済みのページの中のタブ（全件サマリ / 1件ずつ流す）。
    フィルター（未確認・確認済み）より上の段に置く —— 一覧そのものが入れ替わる操作で、
-   同じ列に並べると「絞り込みの一種」に見える */
+   同じ列に並べると「絞り込みの一種」に見える。
+   未ブロックのページには一覧が1つしか無いので、この段ごと隠す */
 .modebar {
   padding: 0 32px;
   margin-bottom: 12px;
@@ -520,28 +539,8 @@ a.reason-link:hover {
   display: flex;
   gap: 8px;
   align-items: center;
-  /* ボタンが5つ並ぶので、狭い画面では折り返させる ——
-     はみ出させると画面の外に隠れて気づけない */
+  /* 狭い画面では折り返させる —— はみ出させると画面の外に隠れて気づけない */
   flex-wrap: wrap;
-}
-
-.filter-btn {
-  padding: 6px 14px;
-  border: 1px solid var(--c-border-strong);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--c-muted);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  letter-spacing: 0.04em;
-  transition: all 0.15s;
-}
-
-.filter-btn.active {
-  background: var(--c-border);
-  color: var(--c-text);
-  border-color: var(--c-muted);
 }
 
 .refresh-btn {
@@ -1459,9 +1458,13 @@ a.reason-link:hover {
    削られて0幅まで潰れ、`word-break: break-all` と相まってドメインもメモも1文字ずつ
    縦に折り返して読めなくなっていた。grid にして、1段目にドメインとメモ、2段目に操作を置く */
 @media (max-width: 720px) {
-  header { padding: 16px 14px; gap: 12px; }
+  /* ページが3つになるとヘッダーは1行に収まらない。 折り返して2段にする ——
+     切り替えを縮めて字を小さくするより、行を足すほうが押しやすい */
+  header { padding: 16px 14px; gap: 12px; flex-wrap: wrap; }
+  .pagenav { gap: 4px; }
+  .page-btn { padding: 6px 10px; }
   .stats { padding: 0 14px; margin: 16px 0; }
-  .stat { padding: 12px 10px; }
+  .stat { padding: 10px 10px; }
   .stat-value { font-size: 22px; }
   .toolbar { padding: 0 14px; }
   .modebar { padding: 0 14px; }

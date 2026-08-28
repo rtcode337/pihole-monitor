@@ -5,16 +5,42 @@ const EDIT_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" s
 const SUN_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const MOON_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 
+// 集計の一覧（全件サマリ・未ブロックの監視）。モードを切り替えるたびに取り直す
 let allDomains = [];
+// 流れてきた行（1件ずつ流す）。集計とは別に持つ —— 同じ変数に入れていた頃は、
+// タブを開いた瞬間に全件サマリの中身がそのまま「いま来ている」ものとして並んでいた。
+// 別に持てば、離れて戻っても積んだ行がそのまま残る
+let liveRows = [];
 let currentFilter = 'new';
-// 'blocked' = Pi-holeが止めたもの / 'watch' = 素通りしているものの中の怪しい候補。
-// 同じ一覧の変数に入れるので、フィルター・選択・まとめて聞く・詳細モーダルは
-// どちらのモードでもそのまま動く（行が持つ項目が増えるだけ）
-let currentMode = 'blocked';
+// 'summary' = Pi-holeが止めたものの集計 / 'live' = 止められたものを1件ずつ流す /
+// 'watch' = 素通りしているものの中の怪しい候補。行の作り・フィルター・選択・
+// まとめて聞く・詳細モーダルはどのモードでもそのまま動く（行が持つ項目が増えるだけ）
+let currentMode = 'summary';
+
+// いま画面に出している行。 一覧を読むところは必ずこれを通す ——
+// モードごとに変数を見に行くと、片方だけ直し忘れて食い違う
+function rows() {
+  return currentMode === 'live' ? liveRows : allDomains;
+}
 // いま出している一覧の付帯情報（`/api/domains`・`/api/watch` の応答の、items 以外の全部）。
 // 前置きの文と Pi-hole のクエリログへのリンクをここから組む —— どちらのモードでも
 // 「一覧そのもの」と「どこまで見えているか」を1つの応答で返してもらう
 let listMeta = null;
+// 「1件ずつ流す」ぶんの付帯情報。集計とは別に持つ —— 別のページを見ている間に
+// listMeta は取り直されるので、同じ変数に置くと戻ってきたときに行のリンクの窓がずれる
+let liveMeta = null;
+
+// いま出している一覧の付帯情報。行のリンクと「いまも続いているか」の判定はここから引く
+function currentMeta() {
+  return currentMode === 'live' ? liveMeta : listMeta;
+}
+
+// AIに渡す一覧の種別。 流れてきた行も止められたドメインなので、集計と同じ扱いにする ——
+// 'live' をそのまま渡すと、サーバ側は知らない値として既定（ブロック済み）に倒すだけで、
+// 何を渡しているのかが読み取れない
+function askMode() {
+  return currentMode === 'watch' ? 'watch' : 'blocked';
+}
 let pendingDomain = null;
 let answerPendingDomain = null;
 // /api/ai の応答。相手の一覧・選択・繋がらない理由が入る（取れなければ null）
@@ -287,13 +313,14 @@ function showFetchError() {
 }
 
 function updateStats() {
-  const newCount = allDomains.filter(d => !d.reviewed).length;
+  const items = rows();
+  const newCount = items.filter(d => !d.reviewed).length;
   // 見たいのは「あとどれだけ確認が残っているか」なので、確認済みの数はそのまま出す
-  const reviewedCount = allDomains.filter(d => d.reviewed).length;
+  const reviewedCount = items.filter(d => d.reviewed).length;
   document.getElementById('stat-new').textContent = newCount;
   document.getElementById('stat-reviewed').textContent = reviewedCount;
-  document.getElementById('stat-total').textContent = allDomains.length;
-  // 3つ目の数字は意味が変わる。 ブロック済みでは「止めた総数」だが、
+  document.getElementById('stat-total').textContent = items.length;
+  // 3つ目の数字は意味が変わる。 全件サマリでは「止めた総数」だが、
   // 監視では「挙がった候補の数」——同じラベルのままだと嘘になる
   document.getElementById('stat-total-label').textContent =
     currentMode === 'watch' ? '怪しい候補'
@@ -301,19 +328,34 @@ function updateStats() {
     : 'ブロック総数';
 }
 
-function setFilter(filter, event) {
+// 絞り込みは上の件数の面（`.stat`）で切り替える。 数字を見てから押す先が
+// 結局その3つなので、同じことを言うボタンを下にもう1列並べない
+const FILTER_STATS = {new: 'filter-new', reviewed: 'filter-reviewed', all: 'filter-all'};
+
+function setFilter(filter) {
   currentFilter = filter;
-  document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-  event.target.classList.add('active');
+  renderFilterState();
   renderDomains();
+}
+
+// いま選んでいる面を塗る。 押せることも、どれを見ているかも、ここでしか示せない
+// （ボタンの列が無いので、塗り分けを落とすと「全部の数字が同じに見える」）
+function renderFilterState() {
+  for (const [filter, id] of Object.entries(FILTER_STATS)) {
+    const el = document.getElementById(id);
+    const on = filter === currentFilter;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
 }
 
 // いまのフィルターで画面に出ているドメイン。描画と「まとめて聞く」の対象が
 // 同じ1か所から出るようにする（食い違うと、見えていない行にメモが付く）
 function filteredDomains() {
-  if (currentFilter === 'new') return allDomains.filter(d => !d.reviewed);
-  if (currentFilter === 'reviewed') return allDomains.filter(d => d.reviewed);
-  return allDomains;
+  const items = rows();
+  if (currentFilter === 'new') return items.filter(d => !d.reviewed);
+  if (currentFilter === 'reviewed') return items.filter(d => d.reviewed);
+  return items;
 }
 
 // 候補が挙がった理由。必ず出す —— 「なぜこれが並んでいるのか」が読めない一覧は、
@@ -325,7 +367,9 @@ function filteredDomains() {
 // 同じドメインが何行も並ぶ —— 1行だけ書き換えると、確認済みにしたのに
 // 他の行が未確認のまま残る（同じドメインなのに状態が食い違って見える）
 function updateDomainRows(domain, patch) {
-  for (const item of allDomains) {
+  // 両方の一覧に当てる。 メモも確認済みもドメイン単位の記録なので、
+  // 流れてきた行で確認済みにしたものが、集計へ戻ると未確認に見える、を防ぐ
+  for (const item of [...allDomains, ...liveRows]) {
     if (item.domain === domain) Object.assign(item, patch);
   }
 }
@@ -345,14 +389,15 @@ function reviewedBadge(d) {
 // 時間の範囲は判定に使った窓とそろえる（画面が持つ現在時刻は使わない）。
 // Pi-hole の管理画面の URL が分からなければ空を返し、呼び出し側がリンクをやめる
 function piholeQueryUrl(filter) {
-  if (!listMeta || !listMeta.pihole_url || !filter) return '';
+  const m = currentMeta();
+  if (!m || !m.pihole_url || !filter) return '';
   const params = Object.entries(filter).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   if (!params.length) return '';
-  // 時間の範囲は両方のモードで付く。ブロック済みの一覧も監視と同じ窓
-  // （直近24時間）でアクセス元と期間を出しているので、リンクの先も同じ範囲にする ——
+  // 時間の範囲はどのモードでも付く。集計の一覧も監視と同じ窓（直近24時間）で
+  // アクセス元と期間を出しているので、リンクの先も同じ範囲にする ——
   // 画面に出ている期間とクエリログの中身が食い違うと、確かめに行った意味が無い
-  if (listMeta.since) params.push(`from=${listMeta.since}`);
-  if (listMeta.until) params.push(`until=${listMeta.until}`);
+  if (m.since) params.push(`from=${m.since}`);
+  if (m.until) params.push(`until=${m.until}`);
   return `/go/queries?${params.join('&')}`;
 }
 
@@ -414,7 +459,8 @@ const ONGOING_SECS = 3600;
 // ずれているだけで常に続いて見えたり、逆に一度も続かなくなる
 // （記録の時刻は Pi-hole 側の時計で付いている）
 function isOngoing(d) {
-  const now = listMeta && listMeta.now;
+  const m = currentMeta();
+  const now = m && m.now;
   return !!(now && d.active_to && now - d.active_to <= ONGOING_SECS);
 }
 
@@ -493,7 +539,7 @@ function renderDomains() {
     if (currentMode === 'live') {
       // 積んだ行はあるがフィルターで全部隠れている、という状態を「まだ何も来ていない」と
       // 書かない —— 受信が止まったのかフィルターのせいなのかが画面から読めなくなる
-      if (allDomains.length) {
+      if (liveRows.length) {
         list.innerHTML = `<div class="empty"><div class="empty-icon">&#9679;</div>${
           currentFilter === 'reviewed'
             ? '流れてきたなかに確認済みのものはまだありません'
@@ -578,6 +624,9 @@ let liveCursor = null;    // {after_id, since}。ここまでは受け取った�
 let liveStartedAt = 0;    // 受信を始めた時刻（サーバの時計。unix秒）
 let liveStatus = '';      // 途切れたときの断り書き
 let liveDropped = 0;      // 画面から溢れて落とした行数
+// 一覧に「止めていた間の抜け」があるか。止める→始めるの間に来たものは流れてこないので、
+// 行を残したまま再開したときは、そう断る（黙って続けると連続した記録に見える）
+let liveGap = false;
 
 function liveContextHtml() {
   const started = liveStartedAt
@@ -586,31 +635,40 @@ function liveContextHtml() {
   const button = liveRunning
     ? '<button class="action-btn cancel-btn" onclick="stopLive(true)">受信を止める</button>'
     : '<button class="action-btn ok-btn" onclick="startLive()">受信を始める</button>';
+  // 消すのは押したときだけ。 始める・止めるでは消さない ——
+  // 止めて読み返してからまた流す、が普通の使い方なので、そこで消えると読む前に失われる
+  const clear = liveRows.length
+    ? '<button class="action-btn cancel-btn" onclick="clearLive()">一覧をクリア</button>'
+    : '';
   const state = liveRunning
     ? '<span class="live-dot"></span>受信中'
     : (liveStartedAt ? '停止中' : 'まだ始めていません');
   const parts = [
     `${started}を、来たものから1件ずつ並べます（${LIVE_POLL_MS / 1000} 秒おきに聞きます）。`
     + '<strong>同じドメイン・同じアクセス元でも、来るたびに新しい行</strong>になります。',
-    '<strong>確認済みにしたドメインは流れてきません</strong>'
-    + '（調べて納得したものが流れ続けると、まだ見ていないものが埋もれます）。',
+    '<strong>ここに出るのは Pi-hole が止めたものだけ</strong>です'
+    + '（素通りした通信は「未ブロック」のページにあります）。',
   ];
+  if (liveGap) {
+    parts.push('<span class="watch-warn">受信を止めていた間に来たものは入っていません'
+      + '（一覧には前の受信ぶんも残っています）。</span>');
+  }
   if (liveDropped) {
     parts.push(`<span class="watch-warn">画面に残すのは新しい ${LIVE_MAX_ROWS} 行までです`
       + `（${liveDropped.toLocaleString()} 行は流れていきました）。</span>`);
   }
   if (liveStatus) parts.push(`<span class="watch-warn">${escapeHtml(liveStatus)}</span>`);
-  return `<div class="live-bar">${button}<span class="live-state">${state}</span></div>`
+  return `<div class="live-bar">${button}${clear}<span class="live-state">${state}</span></div>`
     + parts.join('<br>');
 }
 
 // 受信を始める。まず「いまの位置」だけを聞き、そこから先を流す ——
-// 押す前に起きていたものまで出すと、「押したタイミングから」にならない
+// 押す前に起きていたものまで出すと、「押したタイミングから」にならない。
+// 積んだ行は消さない（消すのは「一覧をクリア」だけ）
 async function startLive() {
   stopLive();
-  allDomains = [];
-  liveDropped = 0;
   liveStatus = '';
+  if (liveRows.length) liveGap = true;
   try {
     const resp = await fetch('/api/live');
     if (!resp.ok) throw new Error('start');
@@ -618,13 +676,24 @@ async function startLive() {
     liveCursor = {after_id: body.after_id, since: body.since};
     liveStartedAt = body.now;
     // 行から Pi-hole のクエリログへ飛べるようにする。範囲は受信を始めた時刻から先
-    // （一覧と同じ組み立てを使うので、窓は listMeta に置く）
-    listMeta = {pihole_url: body.pihole_url, since: body.now, until: null};
+    // （一覧と同じ組み立てを使うので、窓は liveMeta に置く）
+    liveMeta = {pihole_url: body.pihole_url, since: body.now, until: null};
     liveRunning = true;
     liveTimer = setInterval(pollLive, LIVE_POLL_MS);
   } catch (e) {
     liveStatus = 'Pi-hole に聞けませんでした。少し待ってからもう一度押してください';
   }
+  updateStats();
+  renderContext();
+  renderDomains();
+}
+
+// 積んだ行を捨てる。 押したときだけ消える —— 始める・止めるでは消さない
+function clearLive() {
+  liveRows = [];
+  liveDropped = 0;
+  liveGap = false;
+  selectedDomains.clear();
   updateStats();
   renderContext();
   renderDomains();
@@ -651,10 +720,10 @@ async function pollLive() {
     if (items.length) {
       // 新しいものが上。溢れたぶんは古いほうから落とす（落とした数は前置きに出す ——
       // 黙って消すと、見ているものが全部だと思い込む）
-      allDomains = items.concat(allDomains);
-      if (allDomains.length > LIVE_MAX_ROWS) {
-        liveDropped += allDomains.length - LIVE_MAX_ROWS;
-        allDomains = allDomains.slice(0, LIVE_MAX_ROWS);
+      liveRows = items.concat(liveRows);
+      if (liveRows.length > LIVE_MAX_ROWS) {
+        liveDropped += liveRows.length - LIVE_MAX_ROWS;
+        liveRows = liveRows.slice(0, LIVE_MAX_ROWS);
       }
       updateStats();
       renderDomains();
@@ -756,7 +825,7 @@ function openModal(domain, existingNote = '') {
   document.getElementById('modal-domain').textContent = domain;
   document.getElementById('modal-note').value = existingNote;
   // 既に確認済みなら「確認済みにする」は出さない（押しても何も変わらないボタンを置かない）
-  const item = allDomains.find(d => d.domain === domain);
+  const item = rows().find(d => d.domain === domain);
   const decided = !!(item && item.reviewed);
   document.getElementById('modal-review-btn').hidden = decided;
   document.getElementById('modal').style.display = 'flex';
@@ -813,7 +882,7 @@ function onDetailOverlayMouseDown(event) {
 // 「開いているときだけ描き直す」の判定はここに1つ置く
 function renderDetail() {
   if (!detailDomain) return;
-  const d = allDomains.find(x => x.domain === detailDomain);
+  const d = rows().find(x => x.domain === detailDomain);
   // 一覧の読み直しで消えたドメイン（Pi-hole 側から落ちた等）は閉じる ——
   // 中身の無い詳細を開いたままにしない
   if (!d) { closeDetailModal(); return; }
@@ -897,8 +966,8 @@ async function askOne(domain) {
       // 「ブロックされたドメイン」として説明される。理由（観測した事実）も一緒に渡す
       body: JSON.stringify({
         domain,
-        mode: currentMode,
-        reason: reasonText(allDomains.find(d => d.domain === domain))
+        mode: askMode(),
+        reason: reasonText(rows().find(d => d.domain === domain))
       })
     });
     result = await resp.json();
@@ -967,8 +1036,8 @@ async function askFollowup() {
       body: JSON.stringify({
         domain,
         question,
-        mode: currentMode,
-        reason: reasonText(allDomains.find(d => d.domain === domain))
+        mode: askMode(),
+        reason: reasonText(rows().find(d => d.domain === domain))
       })
     });
     result = await resp.json();
@@ -1020,7 +1089,7 @@ function scrollResearchToBottom() {
 // フィルターに関係なく未確認を見る（表示を切り替えただけで対象が変わると分かりにくい）
 function bulkTargets() {
   const regenerate = bulkRegenerate();
-  return allDomains
+  return rows()
     .filter(d => !d.reviewed)
     .filter(d => regenerate || !d.note)
     .map(d => d.domain);
@@ -1119,7 +1188,7 @@ async function runBulkAsk() {
     // 対応表で渡す —— 並びで対応させると、サーバ側の重複・空白落としでずれる
     const reasons = {};
     for (const domain of chunk) {
-      const text = reasonText(allDomains.find(d => d.domain === domain));
+      const text = reasonText(rows().find(d => d.domain === domain));
       if (text) reasons[domain] = text;
     }
 
@@ -1130,7 +1199,7 @@ async function runBulkAsk() {
         headers: {'Content-Type': 'application/json'},
         // どちらの一覧かを渡す。 ブロック済みと監視では聞くことが違う
         // （監視の候補に「ブロックされたと考えられます」と書かせない）
-        body: JSON.stringify({domains: chunk, mode: currentMode, reasons})
+        body: JSON.stringify({domains: chunk, mode: askMode(), reasons})
       });
       result = await resp.json();
     } catch(e) {
@@ -1428,52 +1497,90 @@ async function saveToken() {
 // その先に本当に届くのかは分からない —— 実際にパケットを出して確かめる場所を用意する。
 // 相手先の確かめとコマンドの組み立てはサーバ側（src/diag.rs）。画面は文字を渡すだけ
 
-// ---- ページとモードの切り替え（ドメイン / 設定・ブロック済み / 未ブロックの監視）----
-// どちらも URL のハッシュで持つ（`#domains/watch` の形）。 戻る/進むとブックマークを
+// ---- ページとモードの切り替え（ブロック済み / 未ブロック / 設定）----
+// どちらも URL のハッシュで持つ（`#blocked/live` の形）。 戻る/進むとブックマークを
 // そのまま効かせるため（JS でボタンを押し替える作りだと、どちらも効かない）。
-// モードも URL に入れる。 変数だけで持っていた頃は、監視を見ている最中に
-// 読み直す（下に引っ張って更新・PWA の復帰）とブロック済みへ戻っていた ——
+// モードも URL に入れる。 変数だけで持っていた頃は、一覧を見ている最中に
+// 読み直す（下に引っ張って更新・PWA の復帰）と既定の一覧へ戻っていた ——
 // 押した覚えの無い切り替わり方で、しかも一覧が似ているので気づきにくい。
 // 知らない値はそれぞれ既定に倒す —— 白い画面を出さない
-const PAGES = ['domains', 'settings'];
-const MODES = ['blocked', 'watch', 'live'];
-let currentPage = 'domains';
+//
+// **止められたものと素通りしたものはページで分ける。** 材料も判定も違うので、
+// 同じ段のタブに並べると「絞り込みの一種」に見える。ブロック済みの中の2つは
+// どちらも止められたドメインで、集計で見るか流れで見るかの違いしかない
+const PAGES = {
+  blocked: {modes: ['summary', 'live'], element: 'page-list'},
+  unblocked: {modes: ['watch'], element: 'page-list'},
+  settings: {modes: [], element: 'page-settings'},
+};
+let currentPage = 'blocked';
+// ブロック済みのページで最後に見ていたタブ。ヘッダーから戻ったときにここへ帰す ——
+// 常に全件サマリへ落とすと、流している最中に設定を覗いただけでタブが入れ替わる
+let blockedMode = 'summary';
+
+// 旧いハッシュの読み替え。 ブックマークとホーム画面のショートカットを生かす ——
+// 知らない形として既定に倒すと、開いた人には「勝手に別の画面へ飛んだ」としか見えない
+const LEGACY_HASH = {
+  'domains': 'blocked/summary',
+  'domains/blocked': 'blocked/summary',
+  'domains/watch': 'unblocked',
+  'domains/live': 'blocked/live',
+};
 
 function routeFromHash() {
-  const [page, mode] = (location.hash || '').replace(/^#/, '').split('/');
-  return {
-    page: PAGES.includes(page) ? page : 'domains',
-    // モードの無いハッシュ（`#domains` / `#settings`）ではモードを変えない ——
-    // 設定を開いただけで一覧が入れ替わるのは、押した覚えの無い切り替わり方
-    mode: MODES.includes(mode) ? mode : null,
-  };
+  let raw = (location.hash || '').replace(/^#/, '');
+  if (LEGACY_HASH[raw]) {
+    raw = LEGACY_HASH[raw];
+    // 書き換えるだけ（hashchange は起きない）。 このあとそのまま解釈する
+    history.replaceState(null, '', `#${raw}`);
+  }
+  const [page, mode] = raw.split('/');
+  const name = PAGES[page] ? page : 'blocked';
+  return {page: name, mode: modeForPage(name, mode)};
+}
+
+// そのページで出す一覧。 設定にはモードが無いので、いまのモードをそのまま持ち越す ——
+// 設定を開いただけで一覧が入れ替わるのは、押した覚えの無い切り替わり方
+function modeForPage(page, mode) {
+  const modes = PAGES[page].modes;
+  if (!modes.length) return currentMode;
+  if (modes.includes(mode)) return mode;
+  return page === 'blocked' ? blockedMode : modes[0];
 }
 
 // `initial` は最初の1回。 モードが決まっても読み直さない ——
 // この直後に `loadDomains()` を1回呼ぶので、同じ一覧を二重に取りに行かないため
 function applyRoute(initial) {
   const route = routeFromHash();
-  const modeChanged = route.mode !== null && route.mode !== currentMode;
+  const modeChanged = route.mode !== currentMode;
   if (modeChanged) {
     currentMode = route.mode;
     // モードを跨いだ選択は残さない。 別の一覧の行を選んだまま「選択を確認済みにする」を
     // 押すと、見えていないものを確認済みにすることになる
     selectedDomains.clear();
   }
+  if (currentMode !== 'watch') blockedMode = currentMode;
   currentPage = route.page;
-  for (const name of PAGES) {
-    document.getElementById(`page-${name}`).hidden = name !== currentPage;
+  for (const [name, page] of Object.entries(PAGES)) {
     document.getElementById(`page-btn-${name}`).classList.toggle('active', name === currentPage);
+    if (name === currentPage) document.getElementById(page.element).hidden = false;
   }
-  // ヘッダーの「ドメイン」はいま見ているモードへ戻す —— `#domains` へ戻すと、
+  // 出すのは1枚だけ。 ブロック済みと未ブロックは同じ器を使うので、
+  // 「開いているほうを出す」→「それ以外を隠す」の順で当てる（自分自身を隠さない）
+  for (const page of Object.values(PAGES)) {
+    const el = document.getElementById(page.element);
+    if (el.id !== PAGES[currentPage].element) el.hidden = true;
+  }
+  // ヘッダーの「ブロック済み」はいま見ているタブへ戻す —— `#blocked` へ戻すと、
   // 設定から帰ってきて読み直したときにタブが入れ替わる
-  document.getElementById('page-btn-domains').href = `#domains/${currentMode}`;
-  for (const mode of MODES) {
+  document.getElementById('page-btn-blocked').href = `#blocked/${blockedMode}`;
+  // タブの段はブロック済みのページにしかない（未ブロックは一覧が1つ）
+  document.getElementById('modebar').hidden = currentPage !== 'blocked';
+  for (const mode of PAGES.blocked.modes) {
     document.getElementById(`mode-${mode}`).classList.toggle('active', mode === currentMode);
   }
-  // 「いま来ているもの」から離れたら受信を止める。 見ていない画面のために
-  // Pi-hole を数秒おきに叩き続ける理由が無い（戻ったら押し直す）
-  if (!(currentPage === 'domains' && currentMode === 'live')) stopLive();
+  // 受信は画面を離れても止めない（戻ったら続きが積まれている）。 止めるのは
+  // 「受信を止める」を押したときと、タブを裏に回している間だけ
   if (modeChanged && !initial) loadDomains();
   // 設定を開いたときに読み直す。 別の端末で変えた値のまま保存すると上書きになるし、
   // Chiezoを後から起動した場合に、画面を読み直さなくても相手が出てくる
@@ -1857,7 +1964,7 @@ function anyModalOpen() {
 document.addEventListener('touchstart', e => {
   if (e.touches.length !== 1 || anyModalOpen()) return;
   // 一覧を出しているときだけ。 設定のページで引っ張っても読み直すものが無い
-  if (currentPage !== 'domains') return;
+  if (currentPage === 'settings') return;
   // 一番上にいるときだけ始める（途中から始めると普通のスクロールを邪魔する）
   if (window.scrollY > 0) return;
   pullStartY = e.touches[0].clientY;
@@ -1939,7 +2046,7 @@ function copyDomain(btn) {
 // 調査結果をまるごとコピーする。本文は属性に載せない ——
 // 見出し付きで何行にもなるので、一覧から引く（行の DOM を重くしない）
 function copyResearch(btn) {
-  const item = allDomains.find(d => d.domain === btn.dataset.domain);
+  const item = rows().find(d => d.domain === btn.dataset.domain);
   if (!item || !item.research) return;
   copyText(btn, item.research);
 }
@@ -2079,6 +2186,7 @@ document.getElementById('ai-list').addEventListener('change', e => {
 });
 
 renderTheme();
+renderFilterState();
 applyRoute(true);
 loadDomains();
 loadAi();
