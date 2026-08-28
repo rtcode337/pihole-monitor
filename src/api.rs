@@ -596,7 +596,7 @@ struct LiveQuery {
     since: Option<f64>,
 }
 
-/// 押した時点から先の、未確認のブロックを1件ずつ流す。
+/// 押した時点から先のブロックを1件ずつ流す。
 ///
 /// **画面が数秒おきに呼ぶ**。カーソル(`after_id` / `since`)を渡さない初回は、
 /// いまの先頭を返すだけで行は流さない —— これで「押したときから先」になる。
@@ -648,20 +648,18 @@ async fn live(State(state): State<AppState>, Query(q): Query<LiveQuery>) -> Resp
     let items: Vec<LiveEntry> = batch
         .fresh
         .iter()
-        .filter_map(|r| {
+        .map(|r| {
             let record = known.get(&r.domain);
-            // 確認済みのドメインは流さない。「調べて納得した」ものが延々と流れてくると、
-            // まだ見ていないものが埋もれる
-            if record.is_some_and(|rec| rec.reviewed) {
-                return None;
-            }
             let ts = r.ts as i64;
-            Some(LiveEntry {
+            // 確認済みかどうかは落とさずに載せる。 どれを出すかは画面のフィルター
+            // (未確認 / 確認済み / すべて)が決める —— ここで間引くと、
+            // 「確認済み」を選んでも何も出てこない一覧になる
+            LiveEntry {
                 id: r.id,
                 ts,
                 domain: r.domain.clone(),
                 count: 1,
-                reviewed: false,
+                reviewed: record.is_some_and(|rec| rec.reviewed),
                 note: record.map(|rec| rec.note.clone()).unwrap_or_default(),
                 research: record.map(|rec| rec.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|rec| rec.researched_at.clone()).unwrap_or_default(),
@@ -673,7 +671,7 @@ async fn live(State(state): State<AppState>, Query(q): Query<LiveQuery>) -> Resp
                 }],
                 active_from: ts,
                 active_to: ts,
-            })
+            }
         })
         .collect();
 
@@ -701,7 +699,7 @@ struct LiveBatch<'a> {
 /// (`ingest.rs` と同じ話)、巻き戻っているときだけ時刻で切る —— そのままだと新しい行が
 /// 「見たことのある id」として弾かれ続け、静かに止まる。
 ///
-/// カーソルは**見えたところまで**進める。確認済みで画面に出さないぶんも「見た」——
+/// カーソルは**見えたところまで**進める。画面のフィルターで隠れるぶんも「見た」——
 /// 出さないものでカーソルを止めると、毎回同じものを引き直すことになる。
 /// 1件も無いときは窓を「いま」の手前まで畳む(窓が伸び続けて応答が重くなるのを防ぐ)。
 fn live_batch<'a>(

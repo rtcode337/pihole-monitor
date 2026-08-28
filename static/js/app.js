@@ -491,6 +491,16 @@ function renderDomains() {
   if (filtered.length === 0) {
     renderSelection(filtered);
     if (currentMode === 'live') {
+      // 積んだ行はあるがフィルターで全部隠れている、という状態を「まだ何も来ていない」と
+      // 書かない —— 受信が止まったのかフィルターのせいなのかが画面から読めなくなる
+      if (allDomains.length) {
+        list.innerHTML = `<div class="empty"><div class="empty-icon">&#9679;</div>${
+          currentFilter === 'reviewed'
+            ? '流れてきたなかに確認済みのものはまだありません'
+            : '流れてきたものは全部確認済みです'
+        }</div>`;
+        return;
+      }
       list.innerHTML = liveRunning
         ? '<div class="empty"><div class="empty-icon">&#9679;</div>受信中です。まだ何も止められていません</div>'
         : '<div class="empty"><div class="empty-icon">&#9679;</div>「受信を始める」を押すと、そのときから先に止められた通信が流れます</div>';
