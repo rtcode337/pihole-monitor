@@ -42,14 +42,14 @@
        同じ一覧の中のタブにすると「絞り込みの一種」に見える -->
   <nav class="pagenav">
     <a class="page-btn" id="page-btn-blocked" href="#blocked">ブロック済み</a>
-    <a class="page-btn" id="page-btn-unblocked" href="#unblocked">未ブロック</a>
+    <a class="page-btn" id="page-btn-unblocked" href="#unblocked">気になる通信</a>
     <a class="page-btn" id="page-btn-settings" href="#settings">設定</a>
   </nav>
   <!-- 中身（太陽/月）は app.js が入れる。押すと切り替わる先の印を出す -->
   <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" aria-label="テーマを切り替える"></button>
 </header>
 
-<!-- 一覧のページ（ブロック済み・未ブロックで共用）。ヘッダーで入れ替える ——
+<!-- 一覧のページ（ブロック済み・気になる通信で共用）。ヘッダーで入れ替える ——
      行の作り・フィルター・選択・AIに聞く操作はどちらも同じなので、
      器は1つにして中身（どの一覧を出すか）だけをモードで切り替える -->
 <div id="page-list">
@@ -66,7 +66,7 @@
     <div class="stat-value ok" id="stat-reviewed">-</div>
     <div class="stat-label">確認済み</div>
   </button>
-  <!-- 3つ目は「全部」。ラベルはモードで変わる（ブロック総数 / 怪しい候補 / 流れた件数） -->
+  <!-- 3つ目は「全部」。ラベルはモードで変わる（ブロック総数 / 候補 / 流れた件数） -->
   <button class="stat" id="filter-all" onclick="setFilter('all')" aria-pressed="false">
     <div class="stat-value" id="stat-total">-</div>
     <div class="stat-label" id="stat-total-label">ブロック総数</div>
@@ -77,7 +77,7 @@
      見せ方が違う —— 全件サマリはPi-holeの集計、1件ずつ流すのは受信を始めてから先の流れ。
      ヘッダーのページ切り替えと同じくリンク（`#blocked/<モード>`）にしてある ——
      JSの変数だけで持っていた頃は、読み直すと全件サマリへ戻っていた。
-     未ブロックのページは一覧が1つしか無いので、この段ごと隠す（app.jsが出し分ける） -->
+     気になる通信のページは一覧が1つしか無いので、この段ごと隠す（app.jsが出し分ける） -->
 <div class="modebar" id="modebar">
   <a class="mode-btn active" id="mode-summary" href="#blocked/summary">全件サマリ</a>
   <a class="mode-btn" id="mode-live" href="#blocked/live">1件ずつ流す</a>
@@ -199,7 +199,7 @@
     <div class="detail-label">メモが残っているドメイン</div>
     <div class="settings-note">
       メモ・確認済み・調査結果が残っているドメインを、<strong>更新の新しい順に全件</strong>並べます。
-      一覧（ブロック済み・未ブロックの監視）は<strong>いま通信が出ているものしか出さない</strong>ので、
+      一覧（ブロック済み・気になる通信）は<strong>いま通信が出ているものしか出さない</strong>ので、
       静かになったドメインの記録はここから読みます。
     </div>
     <div class="diag-row">

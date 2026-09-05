@@ -5,7 +5,7 @@ const EDIT_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" s
 const SUN_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const MOON_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
 
-// 集計の一覧（全件サマリ・未ブロックの監視）。モードを切り替えるたびに取り直す
+// 集計の一覧（全件サマリ・気になる通信）。モードを切り替えるたびに取り直す
 let allDomains = [];
 // 流れてきた行（1件ずつ流す）。集計とは別に持つ —— 同じ変数に入れていた頃は、
 // タブを開いた瞬間に全件サマリの中身がそのまま「いま来ている」ものとして並んでいた。
@@ -323,7 +323,7 @@ function updateStats() {
   // 3つ目の数字は意味が変わる。 全件サマリでは「止めた総数」だが、
   // 監視では「挙がった候補の数」——同じラベルのままだと嘘になる
   document.getElementById('stat-total-label').textContent =
-    currentMode === 'watch' ? '怪しい候補'
+    currentMode === 'watch' ? '候補'
     : currentMode === 'live' ? '流れた件数'
     : 'ブロック総数';
 }
@@ -647,7 +647,7 @@ function liveContextHtml() {
     `${started}を、来たものから1件ずつ並べます（${LIVE_POLL_MS / 1000} 秒おきに聞きます）。`
     + '<strong>同じドメイン・同じアクセス元でも、来るたびに新しい行</strong>になります。',
     '<strong>ここに出るのは Pi-hole が止めたものだけ</strong>です'
-    + '（素通りした通信は「未ブロック」のページにあります）。',
+    + '（素通りした通信は「気になる通信」のページにあります）。',
   ];
   if (liveGap) {
     parts.push('<span class="watch-warn">受信を止めていた間に来たものは入っていません'
@@ -1497,7 +1497,7 @@ async function saveToken() {
 // その先に本当に届くのかは分からない —— 実際にパケットを出して確かめる場所を用意する。
 // 相手先の確かめとコマンドの組み立てはサーバ側（src/diag.rs）。画面は文字を渡すだけ
 
-// ---- ページとモードの切り替え（ブロック済み / 未ブロック / 設定）----
+// ---- ページとモードの切り替え（ブロック済み / 気になる通信 / 設定）----
 // どちらも URL のハッシュで持つ（`#blocked/live` の形）。 戻る/進むとブックマークを
 // そのまま効かせるため（JS でボタンを押し替える作りだと、どちらも効かない）。
 // モードも URL に入れる。 変数だけで持っていた頃は、一覧を見ている最中に
@@ -1565,7 +1565,7 @@ function applyRoute(initial) {
     document.getElementById(`page-btn-${name}`).classList.toggle('active', name === currentPage);
     if (name === currentPage) document.getElementById(page.element).hidden = false;
   }
-  // 出すのは1枚だけ。 ブロック済みと未ブロックは同じ器を使うので、
+  // 出すのは1枚だけ。 ブロック済みと気になる通信は同じ器を使うので、
   // 「開いているほうを出す」→「それ以外を隠す」の順で当てる（自分自身を隠さない）
   for (const page of Object.values(PAGES)) {
     const el = document.getElementById(page.element);
@@ -1574,7 +1574,7 @@ function applyRoute(initial) {
   // ヘッダーの「ブロック済み」はいま見ているタブへ戻す —— `#blocked` へ戻すと、
   // 設定から帰ってきて読み直したときにタブが入れ替わる
   document.getElementById('page-btn-blocked').href = `#blocked/${blockedMode}`;
-  // タブの段はブロック済みのページにしかない（未ブロックは一覧が1つ）
+  // タブの段はブロック済みのページにしかない（気になる通信は一覧が1つ）
   document.getElementById('modebar').hidden = currentPage !== 'blocked';
   for (const mode of PAGES.blocked.modes) {
     document.getElementById(`mode-${mode}`).classList.toggle('active', mode === currentMode);
@@ -1660,7 +1660,7 @@ function renderClients(body) {
 }
 
 // ---- 設定：メモが残っているドメイン ----
-// 一覧（ブロック済み・未ブロックの監視）はどちらも「いま出ているもの」しか並べない ——
+// 一覧（ブロック済み・気になる通信）はどちらも「いま出ているもの」しか並べない ——
 // ブロック済みは Pi-hole の集計そのもの、監視は見ている窓の中だけ。
 // 静かになったドメインのメモはどちらにも出てこないので、控えをここに置く。
 // 並べるだけで、編集も削除もしない（直すのは一覧の側から）
