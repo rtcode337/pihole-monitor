@@ -500,16 +500,15 @@ async fn domains(State(state): State<AppState>) -> Response {
     // 止まったりする(端末ごとの設定・CNAME 経由)ので、素通りしたぶんまで混ぜると
     // 「ブロックされた通信の期間」ではなくなる。
     //
-    // 範囲は監視の候補と同じ窓([`crate::watch::WINDOW_SECS`] = 24時間)。 かつては手元に
-    // 残っている全部(`since` = 0)を見ていたが、それだと「先週いちど鳴っただけの端末」と
-    // 「いまも鳴っている端末」が同じ顔で並び、いま何が起きているかを読めない。
-    // 監視の側が直近24時間で候補を挙げているので、そちらと同じ窓にして
-    // 2つの一覧を突き合わせられるようにする。
+    // 範囲は手元に残っている全部(`since` = 0 なので、実際には保持期間ぶん)。
+    // かつては監視の候補と同じ24時間の窓に絞っていた —— 「いまも鳴っている端末」と
+    // 「先週いちど鳴っただけの端末」を見分けるためだったが、その役はモードを分けた
+    // 「1件ずつ流す」が持つようになった。こちらは集計として読むものなので、
+    // 件数(Pi-hole の全期間)とアクセス元・期間で範囲が食い違うほうが読みにくい。
     // 監視の基準日時(`watch:baseline`)はここには効かせない ——
     // あれは「初出」の判定に使う設定で、ブロック済みの一覧には初出の概念が無い
-    let since = unix_now() - crate::watch::WINDOW_SECS;
     let names: Vec<String> = entries.iter().map(|e| e.domain.clone()).collect();
-    let activity = match state.db.domain_activity_since(since, names, true).await {
+    let activity = match state.db.domain_activity_since(0.0, names, true).await {
         Ok(activity) => activity,
         Err(e) => return internal_error(e, "ブロックされた通信の記録を読み出せない"),
     };
@@ -541,14 +540,14 @@ async fn domains(State(state): State<AppState>) -> Response {
         // 理由の札と同じく、ドメインで絞り込んだクエリログへ飛ばすために渡す
         // (空なら画面はリンクにしない)
         "pihole_url": state.pihole_web_url,
-        // 貯めたクエリの一番古い時刻(unix秒)。窓より新しければ、実際に見えているのはそこまで
+        // 貯めたクエリの一番古い時刻(unix秒)。ここがアクセス元と期間の実際の始まり
         "data_since": stats.oldest_ts.map(|ts| ts as i64),
-        // アクセス元と期間を数えた範囲(unix秒)と、その長さ。
-        // 監視の応答と同じ名前・同じ意味にしてあるので、画面は同じ組み立てで断れるし、
-        // Pi-hole のクエリログへのリンクも同じ範囲で開ける
-        "since": since as i64,
+        // アクセス元と期間を数えた範囲(unix秒)。窓を持たなくなったので、始まりは
+        // 「貯まっている一番古い時刻」そのもの。監視の応答と同じ名前にしてあるので、
+        // Pi-hole のクエリログへのリンクは同じ組み立てで開ける
+        // (`window_hours` は返さない —— 窓が無いものに長さを持たせると嘘になる)
+        "since": stats.oldest_ts.map(|ts| ts as i64),
         "until": unix_now() as i64,
-        "window_hours": (crate::watch::WINDOW_SECS / 3600.0) as i64,
         // サーバのいま(unix秒)。画面が「まだ続いている通信か」を判定するのに使う ——
         // 画面の時計で測ると、端末の時計がずれているだけで常に続いて見えたり、
         // 逆に一度も続かなくなる(記録の時刻は Pi-hole 側の時計で付いている)
