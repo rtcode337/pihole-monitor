@@ -192,7 +192,7 @@ async fn investigate(
     }
 
     // メモが空のときだけ「ひとこと」を書く。 調べた以上は一覧にも一言残っていて
-    // ほしいが、人が書いた（あるいは「まとめてAIに聞く」が書いた）判断は上書きしない
+    // ほしいが、人が書いた（あるいは「一括AIメモ生成」が書いた）判断は上書きしない
     // —— 調査結果で黙って上書きすると、書いた判断が消える
     let note = match found.summary.clone() {
         Some(summary) => match state.db.save_note_if_empty(domain.clone(), summary).await {

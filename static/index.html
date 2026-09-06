@@ -113,7 +113,7 @@
   <button class="action-btn ok-btn" id="select-review-btn" onclick="reviewSelected()" disabled>選択を確認済みに</button>
   <button class="action-btn cancel-btn" id="select-clear-btn" onclick="clearSelection()" disabled>選択を解除</button>
   <!-- 「まとめて聞く → 更新」の順（実行 → 読み直し）。聞く相手は設定のページで選ぶ -->
-  <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインをまとめてAIに聞き、結果をメモとして残す">まとめてAIに聞く</button>
+  <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインのメモをまとめてAIに生成する">一括AIメモ生成</button>
   <button class="refresh-btn" onclick="loadDomains()">更新</button>
 </div>
 
@@ -242,10 +242,10 @@
   </div>
 </div>
 
-<!-- まとめてAIに聞く。対象と進捗はJSが組む -->
+<!-- 一括AIメモ生成。対象と進捗はJSが組む -->
 <div class="modal-overlay" id="bulk-modal" style="display:none" onmousedown="onBulkOverlayMouseDown(event)">
   <div class="modal">
-    <div class="modal-title">まとめてAIに聞く<button class="modal-close" onclick="closeBulkModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
+    <div class="modal-title">一括AIメモ生成<button class="modal-close" onclick="closeBulkModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
     <div class="bulk-note" id="bulk-note"></div>
     <!-- 1回の実行で聞く件数の上限。未確認は常に全件聞き直すので、
          枠と時間を使いすぎないための歯止めがここに要る（覚えておく） -->

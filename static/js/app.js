@@ -62,7 +62,7 @@ let followupDraft = '';
 // チェックした行。再描画をまたいで残す（行のDOMは作り直される）
 const selectedDomains = new Set();
 
-// 「まとめてAIに聞く」1回の上限の既定。枠と時間を使いすぎないための歯止め
+// 「一括AIメモ生成」1回の上限の既定。枠と時間を使いすぎないための歯止め
 // （画面で変えられ、localStorageに残る）
 const BULK_LIMIT_DEFAULT = 100;
 
@@ -938,17 +938,16 @@ function renderDetail() {
     </div>
   `;
 
-  // AIに聞く操作はここにしか無い（行には置かない）。 2つ並ぶ ——
-  // 「AIに聞く」は選んだ全員に同時に聞いて1〜2文のメモを書き直す（まとめて聞いた結果の
+  // AIに聞く操作はここにしか無い（行には置かない）。閉じるのは見出しの右上の×だけ。 先頭は「メモを書く」（人が書くのが本筋）。 AIは2つ並ぶ ——
+  // 「AIメモ生成」は選んだ全員に同時に聞いて1〜2文のメモを書き直す（まとめて聞いた結果の
   // 1件だけを聞き直すためのもの）。「詳しく調べる」はメインの1人がweb検索と観測データで深く調べる。
-  // 聞いている間は全部押せない（閉じるも含めて）
+  // 聞いている間は全部押せない（右上の×も含めて）
   document.getElementById('detail-actions').innerHTML = `
-    <button class="action-btn cancel-btn" onclick="closeDetailModal()" ${dis}>閉じる</button>
+    <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)" ${dis}>${EDIT_ICON} メモを書く</button>
     <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askNote(this.dataset.domain)" ${dis}
-            title="選んだ相手全員に同時に聞き、1〜2文のメモを書き直します（すでにメモがあれば置き換えます）">${AI_ICON} ${askingKind === 'note' ? '聞いています…' : (d.note ? 'AIに聞き直す' : 'AIに聞く')}</button>
+            title="選んだ相手全員に同時に聞き、1〜2文のメモを書き直します（すでにメモがあれば置き換えます）">${AI_ICON} ${askingKind === 'note' ? 'AIメモ生成中…' : 'AIメモ生成'}</button>
     <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" ${dis}
             title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（調査結果は入れ替わります）">${AI_ICON} ${askingKind === 'investigate' ? '調べています…' : (d.research ? '詳しく調べ直す' : '詳しく調べる')}</button>
-    <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)" ${dis}>${EDIT_ICON} メモを書く</button>
     ${d.reviewed
       ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)" ${dis}>未確認に戻す</button>`
       : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)" ${dis}>確認済みにする</button>`
@@ -965,7 +964,7 @@ function editNoteFromDetail(domain, note) {
 
 
 // ---- 1件をAIに聞く（メモを書き直す） ----
-// 「まとめてAIに聞く」と同じ口（/api/ask）に1件だけ渡す。相手も同じ ——
+// 「一括AIメモ生成」と同じ口（/api/ask）に1件だけ渡す。相手も同じ ——
 // 選んだ全員に同時に聞き、答えは書き手付きで1つのメモに並ぶ。
 // まとめて聞いた結果のうち1件だけを聞き直したいときのためのもので、メモがあれば置き換える
 // （明示して押すので、まとめて聞くときのように「空いているところだけ」には絞らない。
@@ -1020,7 +1019,7 @@ async function askNote(domain) {
 }
 
 // ---- 1件を詳しく調べる ----
-// 「AIに聞く」とは役割が違う。 あちらは1〜2文のメモを選んだ全員に書かせるもの。
+// 「AIメモ生成」とは役割が違う。 あちらは1〜2文のメモを選んだ全員に書かせるもの。
 // こちらはメインのAI1人に、web検索とPi-holeの観測データを渡して1件を深く調べさせる。
 // 時間がかかる（web検索を伴うので数十秒〜数分）ぶん、押している間の状態は
 // `askingDomains` に持ち、詳細を閉じられなくする。
@@ -1156,7 +1155,7 @@ function scrollResearchToBottom() {
   if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
 }
 
-// ---- まとめてAIに聞く ----
+// ---- 一括AIメモ生成 ----
 // いま一覧に出ているドメインを BULK_CHUNK 件ずつAIに聞き、結果をメモとして残す。
 // 確認済みにはしない —— 調べただけの段階と、人が確認した段階は別
 
@@ -1414,7 +1413,7 @@ function renderAiList() {
     note.textContent = `Chiezo（${aiState.chiezo_url}）に話せる相手がいません。Chiezo 側で「答える」層を有効にしてください。`;
   } else {
     note.className = 'ai-note';
-    note.innerHTML = '<strong>チェック</strong>した相手ぜんぶに「まとめてAIに聞く」の内容を聞き、'
+    note.innerHTML = '<strong>チェック</strong>した相手ぜんぶに「一括AIメモ生成」の内容を聞き、'
       + '答えを「誰が書いたか」付きで1つのメモに並べます。'
       + '<br><strong>メイン</strong>に選んだ1人だけが、詳細画面の「詳しく調べる」'
       + '（web検索とPi-holeの観測データで1件を深く調べる）を担当します。'

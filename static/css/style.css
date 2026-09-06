@@ -1453,12 +1453,15 @@ a.reason-link:hover {
 .followup-input:focus { outline: none; border-color: var(--c-blue); }
 .followup-input:disabled { opacity: 0.6; }
 
-/* 見出しの右端にコピーのボタンを置く行（調査結果の見出し） */
+/* 見出しの右端にコピーのボタンを置く行（調査結果の見出し）。
+   上の観測データと続けて読まれないよう少し離し、人のメモより目立つ太字にする */
 .detail-label-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-top: 14px;
+  font-weight: 700;
 }
 
 /* 見出しに添えるいつ調べたか。見出しと同じ行に小さく置く */
@@ -1467,6 +1470,7 @@ a.reason-link:hover {
   color: var(--c-dim);
   text-transform: none;
   letter-spacing: 0;
+  font-weight: 400;
 }
 
 /* 調査の実行中。詳細を開いたまま待てるようにする */
