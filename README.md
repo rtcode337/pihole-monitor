@@ -151,7 +151,7 @@ cp docker-compose.standalone.example.yml docker-compose.standalone.yml
 - 繋がらないときは理由をそのままダイアログに出す。`/v1` を付けると `HTTP 404` が返る
 - **同じホストでChiezoが動いているのに届かない**ことがある（コンテナからホストの公開ポートへ
   戻る経路が塞がれている）。そのときはChiezoのネットワークに相乗りして
-  `http://chiezo-api:7010` を指す（手順は `docker-compose.yml` のコメント）
+  `http://chiezo-app:7010` を指す（手順は `docker-compose.yml` のコメント）
 
 ### 同梱のCLI経由（Claude Code）
 

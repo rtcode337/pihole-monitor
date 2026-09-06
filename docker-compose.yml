@@ -43,7 +43,7 @@ services:
   # 戻る経路が塞がれている可能性がある(NASのファイアウォール等)。その場合はChiezoの
   # ネットワークに相乗りしてサービス名で呼ぶ —— やることは下の networks: と
   # ファイル末尾の networks: のコメントを外し、CHIEZO_BASE_URL を
-  # http://chiezo-api:7010 にするだけ(chiezo-api はコンテナ名なので、相手の
+  # http://chiezo-app:7010 にするだけ(chiezo-app はコンテナ名なので、相手の
   # プロジェクト名が何でもこの名前で引ける)。
   # `networks:` を書くと既定のネットワークに自動で入らなくなる —— `default` を
   # 並べ忘れると、Pi-hole など外への通信ごと届かなくなる
