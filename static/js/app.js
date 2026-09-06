@@ -47,9 +47,11 @@ let answerPendingDomain = null;
 let aiState = null;
 // まとめて聞いている間は true（同時に2回走らせない・実行中に閉じさせない）
 let bulkRunning = false;
-// 行のボタンで聞いている最中のドメイン。再描画をまたいで残す ——
-// 行のDOMは renderDomains() で作り直されるので、ボタン側に状態を持たせると消える
-const askingDomains = new Set();
+// AIに聞いている最中のドメイン → 何をしているか（'note' / 'investigate' / 'followup'）。
+// 再描画をまたいで残す —— 詳細のDOMは renderDetail() が作り直すので、ボタン側に持たせると消える。
+// 聞いている間、その詳細は閉じられず中身も触れない（closeDetailModal / renderDetail）——
+// 待っている間に他の行を操作できると、どの結果がどの操作のものか追えなくなる
+const askingDomains = new Map();
 // 相手を選ぶモーダルを開くときに出したい一言（トークン未登録で開いたときなど）
 // 詳細を開いているドメイン。ドメイン名だけを持つ（オブジェクトを持つと、
 // AIに聞いた後の allDomains の更新が詳細に映らない）
@@ -581,13 +583,8 @@ function renderDomains() {
              （出していたのは「まだ確認済みにしていない」だけ）。それは左の赤い点と
              「確認済」バッジの有無で足りる -->
         ${reviewedBadge(d)}
-        <!-- 1件だけ聞く。答えはそのままメモになる（回答を見せるモーダルは無い）。
-             聞いている間は押せないようにする —— 状態は askingDomains に持つ（この行のDOMは
-             再描画で作り直されるため） -->
-        ${askingDomains.has(d.domain)
-          ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 調べています…</button>`
-          : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（結果はメモになります）">${AI_ICON} 詳しく調べる</button>`
-        }
+        <!-- AIに聞く操作は行に置かない（詳細の中だけ）。 行から押せると、待っている間に
+             他の行を操作できてしまう。詳細なら聞いている間は閉じられず、他に手が出ない -->
         <!-- メモは確認済みかどうかに関わらず書ける（確認済みにしないと残せなかったのをやめた） -->
         <button class="action-btn edit-note-btn" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="openModal(this.dataset.domain, this.dataset.note)" title="${d.note ? 'メモを書き直す' : 'メモを書く'}">${EDIT_ICON}</button>
         <!-- data-note を必ず渡す。 渡さないと this.dataset.note が undefined になり、
@@ -855,7 +852,7 @@ function onOverlayMouseDown(event) {
 // （相手を選ぶモーダルの #ai-list と同じ流儀）
 document.getElementById('domain-list').addEventListener('click', event => {
   // ボタン・チェックボックスを押したときは詳細を開かない —— 行のどこを押しても開くと、
-  // 「AIに聞く」を押すたびに詳細まで開いてしまう
+  // 「確認済みにする」を押すたびに詳細まで開いてしまう
   if (event.target.closest('button, input, a, label, select, textarea')) return;
   const item = event.target.closest('.domain-item');
   if (item) openDetailModal(item.dataset.domain);
@@ -869,9 +866,24 @@ function openDetailModal(domain) {
   document.getElementById('detail-modal').style.display = 'flex';
 }
 
-function closeDetailModal() {
+// 聞いている間は閉じない（覆い・×・Esc のどれからでも）。閉じると一覧を触れるようになり、
+// 「AIの処理待ちに他の操作をしない」が破れる。`force` は一覧からその行が消えたときだけ
+function closeDetailModal(force = false) {
+  if (!force && detailAsking()) return;
   document.getElementById('detail-modal').style.display = 'none';
   detailDomain = null;
+}
+
+// 詳細を開いているドメインに、いまAIが答えている最中か
+function detailAsking() {
+  return !!(detailDomain && askingDomains.has(detailDomain));
+}
+
+// 聞いている間の案内。何を待っているかで文を変える（メモは数秒、web検索は数十秒）
+function askingMessage(kind) {
+  if (kind === 'note') return 'AIがメモを書いています…（選んだ相手全員に同時に聞いています）。';
+  if (kind === 'followup') return 'AIが答えています…（web検索を伴うので数十秒かかります）。';
+  return 'AIが調べています…（web検索を伴うので数十秒かかります）。';
 }
 
 function onDetailOverlayMouseDown(event) {
@@ -885,11 +897,18 @@ function renderDetail() {
   const d = rows().find(x => x.domain === detailDomain);
   // 一覧の読み直しで消えたドメイン（Pi-hole 側から落ちた等）は閉じる ——
   // 中身の無い詳細を開いたままにしない
-  if (!d) { closeDetailModal(); return; }
+  if (!d) { closeDetailModal(true); return; }
 
-  const asking = askingDomains.has(d.domain);
+  // 聞いている間は中身も操作も触れなくする（is-busy。CSSで薄くして pointer-events を切る）。
+  // 案内（detail-running）だけは薄くしない —— なぜ押せないのかが読めるように
+  const askingKind = askingDomains.get(d.domain);
+  const asking = !!askingKind;
+  const dis = asking ? 'disabled' : '';
+  document.querySelector('#detail-modal .modal').classList.toggle('is-busy', asking);
+  document.getElementById('detail-close-x').disabled = asking;
   document.getElementById('detail-body').innerHTML = `
-    ${asking ? '<div class="detail-running">AIが調べています…（web検索を伴うので数十秒かかります）</div>' : ''}
+    ${asking ? `<div class="detail-running">${askingMessage(askingKind)} 終わるまでこの画面は閉じられません。</div>` : ''}
+    <div class="detail-content">
     <div class="detail-domain">${escapeHtml(d.domain)}<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
     <div class="detail-meta">
       ${d.reviewed ? reviewedBadge(d) : '<span class="badge unreviewed">未確認</span>'}
@@ -910,26 +929,29 @@ function renderDetail() {
         <textarea class="followup-input" id="followup-input" rows="2"
                   placeholder="この結果について、さらに聞く（例: 止めたら何が使えなくなる？）"
                   oninput="setFollowupDraft(this.value)" ${asking ? 'disabled' : ''}>${escapeHtml(followupDraft)}</textarea>
-        <button class="action-btn ask-ai-btn followup-btn" onclick="askFollowup()" ${asking ? 'disabled' : ''}
-                title="メインのAIに、これまでの調査結果と観測データを渡して追加で聞きます（Ctrl+Enter）">${AI_ICON} 追加で聞く</button>
+        <button class="action-btn ask-ai-btn followup-btn" onclick="askFollowup()" ${dis}
+                title="メインのAIに、これまでの調査結果と観測データを渡して追加で聞きます（Ctrl+Enter）">${AI_ICON} ${askingKind === 'followup' ? '答えを待っています…' : '追加で聞く'}</button>
       </div>
     ` : ''}
     <div class="detail-label">メモ</div>
     <div class="detail-note ${d.note ? '' : 'is-empty'}">${d.note ? escapeHtml(d.note) : 'まだメモはありません。'}</div>
+    </div>
   `;
 
-  // 操作は行と同じ顔ぶれ。行から消さない（広い画面では行で完結するほうが速い）ので、
-  // どちらから押しても同じ関数を通す
+  // AIに聞く操作はここにしか無い（行には置かない）。 2つ並ぶ ——
+  // 「AIに聞く」は選んだ全員に同時に聞いて1〜2文のメモを書き直す（まとめて聞いた結果の
+  // 1件だけを聞き直すためのもの）。「詳しく調べる」はメインの1人がweb検索と観測データで深く調べる。
+  // 聞いている間は全部押せない（閉じるも含めて）
   document.getElementById('detail-actions').innerHTML = `
-    <button class="action-btn cancel-btn" onclick="closeDetailModal()">閉じる</button>
-    ${asking
-      ? `<button class="action-btn ask-ai-btn" disabled>${AI_ICON} 調べています…</button>`
-      : `<button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)">${AI_ICON} 詳しく調べる</button>`
-    }
-    <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)">${EDIT_ICON} メモを書く</button>
+    <button class="action-btn cancel-btn" onclick="closeDetailModal()" ${dis}>閉じる</button>
+    <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askNote(this.dataset.domain)" ${dis}
+            title="選んだ相手全員に同時に聞き、1〜2文のメモを書き直します（すでにメモがあれば置き換えます）">${AI_ICON} ${askingKind === 'note' ? '聞いています…' : (d.note ? 'AIに聞き直す' : 'AIに聞く')}</button>
+    <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" ${dis}
+            title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（調査結果は入れ替わります）">${AI_ICON} ${askingKind === 'investigate' ? '調べています…' : (d.research ? '詳しく調べ直す' : '詳しく調べる')}</button>
+    <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)" ${dis}>${EDIT_ICON} メモを書く</button>
     ${d.reviewed
-      ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)">未確認に戻す</button>`
-      : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)">確認済みにする</button>`
+      ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)" ${dis}>未確認に戻す</button>`
+      : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)" ${dis}>確認済みにする</button>`
     }
   `;
 }
@@ -942,19 +964,74 @@ function editNoteFromDetail(domain, note) {
 }
 
 
+// ---- 1件をAIに聞く（メモを書き直す） ----
+// 「まとめてAIに聞く」と同じ口（/api/ask）に1件だけ渡す。相手も同じ ——
+// 選んだ全員に同時に聞き、答えは書き手付きで1つのメモに並ぶ。
+// まとめて聞いた結果のうち1件だけを聞き直したいときのためのもので、メモがあれば置き換える
+// （明示して押すので、まとめて聞くときのように「空いているところだけ」には絞らない。
+// 確認済みの行でも聞ける —— 押した人が置き換えると決めている）。
+
+async function askNote(domain) {
+  // AIが1つも設定されていないなら、送る前に止めて設定へ案内する
+  if (!aiConfigured()) { openAiNotice(); return; }
+  if (askingDomains.has(domain)) return;
+  askingDomains.set(domain, 'note');
+  renderDomains();
+
+  // 候補に挙げた理由も渡す（監視のときだけ中身が入る）。まとめて聞くときと同じ形
+  const reasons = {};
+  const text = reasonText(rows().find(d => d.domain === domain));
+  if (text) reasons[domain] = text;
+
+  let result;
+  try {
+    const resp = await fetch('/api/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({domains: [domain], mode: askMode(), reasons})
+    });
+    result = await resp.json();
+  } catch(e) {
+    result = {success: false, error: '通信に失敗しました'};
+  }
+  askingDomains.delete(domain);
+
+  if (result.error === 'token_required') {
+    renderDomains();
+    openAiNotice('トークンが未登録です。設定のページでトークンを登録するか、Chiezo の相手を選んでください。');
+    return;
+  }
+
+  // 1件しか渡していないので、返るのは多くて1件（サーバがドメインを整えるので名前では引かない）
+  const entry = result.success ? (result.results || [])[0] : null;
+  if (entry) {
+    updateDomainRows(domain, {note: entry.note});
+    renderDomains();
+    // 1人落ちても残りの答えは書かれている。誰が落ちたかはトーストに添える
+    const failures = result.failures || [];
+    showToast(`${domain} のメモを書きました（${(result.authors || []).join(' / ') || 'AI'}）`
+      + (failures.length ? ` — 答えられなかった相手: ${failures.join(' / ')}` : ''),
+      failures.length ? 'error' : 'success');
+    return;
+  }
+
+  renderDomains();
+  showToast(`メモを書けませんでした（${result.error || '答えが返りませんでした'}）`, 'error');
+}
+
 // ---- 1件を詳しく調べる ----
-// 「まとめてAIに聞く」とは役割が違う。 あちらは何十件ぶんの1〜2文のメモを
-// 選んだ全員に書かせるもの。こちらはメインのAI1人に、web検索とPi-holeの観測データを
-// 渡して1件を深く調べさせる。時間がかかる（web検索を伴うので数十秒〜数分）ぶん、
-// 押している間の見た目は行ごとに保つ（`askingDomains`）。
-// 結果はそのままメモになる（保存はサーバ側で済んでいる）。
+// 「AIに聞く」とは役割が違う。 あちらは1〜2文のメモを選んだ全員に書かせるもの。
+// こちらはメインのAI1人に、web検索とPi-holeの観測データを渡して1件を深く調べさせる。
+// 時間がかかる（web検索を伴うので数十秒〜数分）ぶん、押している間の状態は
+// `askingDomains` に持ち、詳細を閉じられなくする。
+// 結果は調査結果（メモとは別の列）になる（保存はサーバ側で済んでいる）。
 
 async function askOne(domain) {
   // AIが1つも設定されていないなら、送る前に止めて設定へ案内する
   // （送っても必ず失敗するので、押した人には「動かない」としか見えない）
   if (!aiConfigured()) { openAiNotice(); return; }
   if (askingDomains.has(domain)) return;
-  askingDomains.add(domain);
+  askingDomains.set(domain, 'investigate');
   renderDomains();
 
   let result;
@@ -991,8 +1068,9 @@ async function askOne(domain) {
     if (result.note) patch.note = result.note;
     updateDomainRows(result.domain, patch);
     renderDomains();
-    // 調べ終わったら詳細を開く。 30秒待たせておいて結果をどこにも出さないと、
-    // 押した人は何が起きたのか分からない（開いていれば renderDetail が描き直す）
+    // 詳細は開いたまま（聞いている間は閉じられない）なので renderDetail が描き直す。
+    // 万一閉じていれば開く —— 30秒待たせておいて結果をどこにも出さないと、
+    // 押した人は何が起きたのか分からない
     if (detailDomain !== domain) openDetailModal(domain);
     showToast(`${domain} を調べました（${result.author || 'AI'}）`
       + `${result.note ? ' — メモにも書きました' : ''}`, 'success');
@@ -1024,7 +1102,7 @@ async function askFollowup() {
   // （送っても必ず失敗するので、押した人には「動かない」としか見えない）
   if (!aiConfigured()) { openAiNotice(); return; }
 
-  askingDomains.add(domain);
+  askingDomains.set(domain, 'followup');
   renderDomains();
 
   let result;
@@ -1152,6 +1230,14 @@ function onBulkOverlayMouseDown(event) {
   if (event.target === document.getElementById('bulk-modal')) closeBulkModal();
 }
 
+// 実行中は中の操作を全部止める（実行・閉じる・上限・作り直し）。
+// 上限と作り直しは変えても今回には効かないので、変わったように見えるだけになる
+function setBulkBusy(busy) {
+  for (const id of ['bulk-run-btn', 'bulk-close-btn', 'bulk-limit', 'bulk-regenerate']) {
+    document.getElementById(id).disabled = busy;
+  }
+}
+
 function bulkLog(message, kind) {
   const log = document.getElementById('bulk-log');
   const line = document.createElement('div');
@@ -1168,9 +1254,7 @@ async function runBulkAsk() {
 
   bulkRunning = true;
   const runBtn = document.getElementById('bulk-run-btn');
-  const closeBtn = document.getElementById('bulk-close-btn');
-  runBtn.disabled = true;
-  closeBtn.disabled = true;
+  setBulkBusy(true);
   document.getElementById('bulk-log').innerHTML = '';
 
   let saved = 0;
@@ -1210,8 +1294,7 @@ async function runBulkAsk() {
       // トークンが要るのはCLIブリッジ経由のとき。設定は相手を選ぶモーダルにあるので、
       // そちらへ送る（残りは中断。入れ直したら押し直せる）
       bulkRunning = false;
-      runBtn.disabled = false;
-      closeBtn.disabled = false;
+      setBulkBusy(false);
       document.getElementById('bulk-modal').style.display = 'none';
       openAiNotice('トークンが未登録です。設定のページでトークンを登録するか、Chiezo の相手を選んでください。');
       return;
@@ -1238,8 +1321,8 @@ async function runBulkAsk() {
   }
 
   bulkRunning = false;
+  setBulkBusy(false);
   runBtn.disabled = bulkTargets().length === 0;
-  closeBtn.disabled = false;
 
   const note = document.getElementById('bulk-note');
   note.className = failedChunks > 0 ? 'bulk-note error-text' : 'bulk-note';
@@ -1302,7 +1385,7 @@ function onAiNoticeOverlayMouseDown(event) {
 // 同じ行に並べて役割の違いを名前で示す
 function primaryRadio(backend, current) {
   const checked = backend === current ? 'checked' : '';
-  return `<label class="ai-row-primary" title="行の「詳しく調べる」を担当する1人">
+  return `<label class="ai-row-primary" title="詳細画面の「詳しく調べる」を担当する1人">
     <input type="radio" name="ai-primary" value="${escapeHtml(backend)}" ${checked}> メイン
   </label>`;
 }
@@ -1333,7 +1416,7 @@ function renderAiList() {
     note.className = 'ai-note';
     note.innerHTML = '<strong>チェック</strong>した相手ぜんぶに「まとめてAIに聞く」の内容を聞き、'
       + '答えを「誰が書いたか」付きで1つのメモに並べます。'
-      + '<br><strong>メイン</strong>に選んだ1人だけが、行の「詳しく調べる」'
+      + '<br><strong>メイン</strong>に選んだ1人だけが、詳細画面の「詳しく調べる」'
       + '（web検索とPi-holeの観測データで1件を深く調べる）を担当します。'
       + '<br>どちらも再起動なしで切り替わります。';
   }

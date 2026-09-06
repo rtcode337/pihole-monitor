@@ -707,7 +707,7 @@ a.reason-link:hover {
 
 .unreview-btn:hover { color: var(--c-text); border-color: var(--c-muted); }
 
-/* 行の「AIに聞く」。押すと1件だけ聞いて、答えがそのままメモになる */
+/* 詳細の「AIに聞く」「詳しく調べる」「追加で聞く」。行には置いていない（詳細の中だけ） */
 .ask-ai-btn {
   border: 1px solid var(--c-amber-border);
   background: transparent;
@@ -1478,6 +1478,14 @@ a.reason-link:hover {
   padding: 8px 10px;
   margin-bottom: 12px;
 }
+
+/* 聞いている間の詳細。中身と操作を薄くして触れなくする（閉じるも×も効かない）——
+   ボタンを disabled にするだけでは、なぜ押せないのかも、文章を選べない理由も見えない。
+   案内（.detail-running）は薄くしない */
+.modal.is-busy .detail-content,
+.modal.is-busy .modal-actions { opacity: 0.55; pointer-events: none; }
+.modal-close:disabled { opacity: 0.35; cursor: default; }
+.modal-close:disabled:hover { background: transparent; color: var(--c-muted); }
 
 /* 操作は4つ並ぶので折り返させる —— はみ出させると画面の外に隠れて気づけない */
 #detail-actions { flex-wrap: wrap; }

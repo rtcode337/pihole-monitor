@@ -235,7 +235,8 @@
      中身（状態・ブロック回数・メモ・操作）はJSが組む -->
 <div class="modal-overlay" id="detail-modal" style="display:none" onmousedown="onDetailOverlayMouseDown(event)">
   <div class="modal">
-    <div class="modal-title">詳細<button class="modal-close" onclick="closeDetailModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
+    <!-- ×は聞いている間だけ押せなくなる（app.js の renderDetail が disabled を付ける） -->
+    <div class="modal-title">詳細<button class="modal-close" id="detail-close-x" onclick="closeDetailModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
     <div class="detail-body" id="detail-body"></div>
     <div class="modal-actions" id="detail-actions"></div>
   </div>
