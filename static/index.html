@@ -245,7 +245,7 @@
 <!-- 一括AIメモ生成。対象と進捗はJSが組む -->
 <div class="modal-overlay" id="bulk-modal" style="display:none" onmousedown="onBulkOverlayMouseDown(event)">
   <div class="modal">
-    <div class="modal-title">一括AIメモ生成<button class="modal-close" onclick="closeBulkModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
+    <div class="modal-title">一括AIメモ生成<button class="modal-close" id="bulk-close-x" onclick="closeBulkModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
     <div class="bulk-note" id="bulk-note"></div>
     <!-- 1回の実行で聞く件数の上限。未確認は常に全件聞き直すので、
          枠と時間を使いすぎないための歯止めがここに要る（覚えておく） -->
@@ -261,8 +261,8 @@
       すでにメモがあるものも作り直す
     </label>
     <div class="bulk-log" id="bulk-log"></div>
+    <!-- 閉じるのは見出しの右上の×だけ（下の列に「閉じる」を重ねない） -->
     <div class="modal-actions">
-      <button class="action-btn cancel-btn" id="bulk-close-btn" onclick="closeBulkModal()">閉じる</button>
       <button class="action-btn confirm-btn" id="bulk-run-btn" onclick="runBulkAsk()">実行</button>
     </div>
   </div>

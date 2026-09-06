@@ -1229,10 +1229,10 @@ function onBulkOverlayMouseDown(event) {
   if (event.target === document.getElementById('bulk-modal')) closeBulkModal();
 }
 
-// 実行中は中の操作を全部止める（実行・閉じる・上限・作り直し）。
+// 実行中は中の操作を全部止める（実行・右上の×・上限・作り直し）。
 // 上限と作り直しは変えても今回には効かないので、変わったように見えるだけになる
 function setBulkBusy(busy) {
-  for (const id of ['bulk-run-btn', 'bulk-close-btn', 'bulk-limit', 'bulk-regenerate']) {
+  for (const id of ['bulk-run-btn', 'bulk-close-x', 'bulk-limit', 'bulk-regenerate']) {
     document.getElementById(id).disabled = busy;
   }
 }
