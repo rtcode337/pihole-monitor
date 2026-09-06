@@ -572,6 +572,82 @@ a.reason-link:hover {
 
 .select-count { color: var(--c-dim); }
 
+/* ---- タグ（分類） ---- */
+/* 行の札。理由の札（色で手を見分ける）と混ざらないよう、色は付けず輪郭だけにする。
+   押すとそのタグで絞り込むので、押せる見た目（カーソル・hover）を持たせる */
+.tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.tag {
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-surface);
+  color: var(--c-muted);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button.tag:hover { color: var(--c-text-strong); border-color: var(--c-muted); }
+
+/* いま絞り込んでいるタグの札は塗る（どのタグで絞っているかを行の側でも示す） */
+.tag.active {
+  background: var(--c-blue-bg);
+  color: var(--c-blue);
+  border-color: var(--c-blue-border);
+}
+
+/* 控え（設定のページ）の札は押せないので、カーソルを変えない */
+span.tag { cursor: default; }
+
+/* タグで絞り込む段。タブの段と同じ左右の余白。付いているタグが無いときは隠れる */
+.tagbar {
+  padding: 0 32px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--c-muted);
+}
+
+.tagbar select {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  max-width: 60vw;
+}
+
+.tag-clear { padding: 3px 10px; }
+
+/* タグの入力欄（タグの画面）。ドメイン名の下に置く */
+.modal-tags {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  margin-bottom: 16px;
+}
+
+.modal-tags:focus { outline: none; border-color: var(--c-blue); }
+
 .domain-list {
   padding: 0 32px 32px;
 }
@@ -1452,6 +1528,24 @@ a.reason-link:hover {
 
 .followup-input:focus { outline: none; border-color: var(--c-blue); }
 .followup-input:disabled { opacity: 0.6; }
+
+/* まだ調べていないとき。メモの空表示（.detail-note.is-empty）と同じ言い方で出す ——
+   節ごと隠すと、調べていないのかそういう欄が無いのかが読めない。
+   ただし枠の主張は抑える（中身の無い箱が、書いてある箱と同じ強さで並ばないように） */
+.detail-research.is-empty {
+  color: var(--c-dim);
+  background: transparent;
+  border-color: var(--c-border);
+  border-left-width: 1px;
+}
+
+/* 「詳しく調べる」を置く行。調査結果のすぐ下（結果の出る場所と押すところを離さない）。
+   追加の質問（.followup）と同じく右寄せにして、節の中の操作だと分かるようにする */
+.research-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -10px 0 16px;
+}
 
 /* 見出しの右端にコピーのボタンを置く行（調査結果の見出し）。
    上の観測データと続けて読まれないよう少し離し、人のメモより目立つ太字にする */

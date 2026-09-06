@@ -31,6 +31,10 @@ pub struct DomainRecord {
     pub research: String,
     /// 調べた日時（ISO8601）。いつの調査かが分からないと鵜呑みにできない。
     pub researched_at: String,
+    /// 分類のタグ(発生元のアプリ名など)。並びは付けた順。
+    /// メモとは別に持つ —— メモは文章で、タグは絞り込みの鍵。文章の中に
+    /// 埋めると同じアプリを同じ表記で書き続けることになり、揃わない
+    pub tags: Vec<String>,
 }
 
 /// 1つのドメインについてこちらが観測した事実(「詳しく調べる」でAIに渡す材料)。
@@ -61,6 +65,7 @@ pub struct NoteRow {
     pub reviewed: bool,
     pub research: String,
     pub researched_at: String,
+    pub tags: Vec<String>,
 }
 
 /// アクセス元1件の日ごとの件数(設定のページの「アクセス元の内訳」に出す)。
@@ -174,7 +179,8 @@ impl Db {
                  note          TEXT,
                  reviewed      INTEGER NOT NULL DEFAULT 0,
                  research      TEXT,
-                 researched_at TEXT
+                 researched_at TEXT,
+                 tags          TEXT
              )",
         )
         .context("domain_notesテーブルを作成できない")?;
@@ -248,7 +254,7 @@ impl Db {
     pub async fn records(&self) -> Result<HashMap<String, DomainRecord>> {
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT domain, note, reviewed, research, researched_at FROM domain_notes",
+                "SELECT domain, note, reviewed, research, researched_at, tags FROM domain_notes",
             )?;
             let rows = stmt.query_map([], |row| {
                 let domain: String = row.get(0)?;
@@ -256,6 +262,7 @@ impl Db {
                 let reviewed: i64 = row.get(2)?;
                 let research: Option<String> = row.get(3)?;
                 let researched_at: Option<String> = row.get(4)?;
+                let tags: Option<String> = row.get(5)?;
                 Ok((
                     domain,
                     DomainRecord {
@@ -263,6 +270,7 @@ impl Db {
                         reviewed: reviewed != 0,
                         research: research.unwrap_or_default(),
                         researched_at: researched_at.unwrap_or_default(),
+                        tags: decode_tags(tags.as_deref()),
                     },
                 ))
             })?;
@@ -350,7 +358,7 @@ impl Db {
             // 総数は別に数える。 ページの中身だけでは「あと何件あるか」が言えない
             let total: i64 = conn.query_row("SELECT COUNT(*) FROM domain_notes", [], |r| r.get(0))?;
             let mut stmt = conn.prepare(
-                "SELECT domain, updated_at, note, reviewed, research, researched_at
+                "SELECT domain, updated_at, note, reviewed, research, researched_at, tags
                    FROM domain_notes ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
             )?;
             let rows = stmt.query_map([limit, offset], |row| {
@@ -361,6 +369,7 @@ impl Db {
                     reviewed: row.get::<_, i64>(3)? != 0,
                     research: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
                     researched_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    tags: decode_tags(row.get::<_, Option<String>>(6)?.as_deref()),
                 })
             })?;
             Ok((rows.collect::<rusqlite::Result<Vec<_>>>()?, total))
@@ -379,11 +388,12 @@ impl Db {
         domains: Vec<String>,
         reviewed: bool,
         note: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Result<()> {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
             for domain in &domains {
-                upsert(&tx, domain, note.as_deref(), Some(reviewed))?;
+                upsert(&tx, domain, note.as_deref(), Some(reviewed), tags.as_deref())?;
                 if !reviewed {
                     cleanup(&tx, domain)?;
                 }
@@ -394,12 +404,75 @@ impl Db {
         .await
     }
 
-    /// メモだけ保存する(確認済みかどうかは変えない)。
-    pub async fn save_note(&self, domain: String, note: String) -> Result<()> {
+    /// メモ(とタグ)だけ保存する(確認済みかどうかは変えない)。
+    /// `tags` は渡したときだけ書く —— メモを書き直す口(AIの結果の書き戻し)から
+    /// 呼ばれたときに、人が付けた分類を空で上書きしないため。
+    pub async fn save_note(
+        &self,
+        domain: String,
+        note: String,
+        tags: Option<Vec<String>>,
+    ) -> Result<()> {
         self.with_conn(move |conn| {
-            upsert(conn, &domain, Some(&note), None)?;
+            upsert(conn, &domain, Some(&note), None, tags.as_deref())?;
             cleanup(conn, &domain)?;
             Ok(())
+        })
+        .await
+    }
+
+    /// タグを書く。`add` なら既にあるものに足し、そうでなければ入れ替える。
+    /// まとめて付けられるようにしてある(チェックした行に同じアプリ名を付ける、が
+    /// 分類の主な使い方なので)。1つのトランザクションで書く。
+    pub async fn set_tags(
+        &self,
+        domains: Vec<String>,
+        tags: Vec<String>,
+        add: bool,
+    ) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            for domain in &domains {
+                let merged = if add {
+                    let current: Option<String> = tx
+                        .query_row(
+                            "SELECT tags FROM domain_notes WHERE domain = ?1",
+                            [domain],
+                            |row| row.get(0),
+                        )
+                        .optional()?
+                        .flatten();
+                    let mut merged = decode_tags(current.as_deref());
+                    merged.extend(tags.iter().cloned());
+                    normalize_tags(merged)
+                } else {
+                    tags.clone()
+                };
+                upsert(&tx, domain, None, None, Some(&merged))?;
+                cleanup(&tx, domain)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 使われているタグと、付いているドメインの数(付けるときの候補と絞り込みの選択肢)。
+    /// 件数の多い順、同数なら名前順。
+    pub async fn tag_counts(&self) -> Result<Vec<(String, i64)>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT tags FROM domain_notes WHERE COALESCE(tags, '') NOT IN ('', '[]')",
+            )?;
+            let mut counts: HashMap<String, i64> = HashMap::new();
+            for encoded in stmt.query_map([], |row| row.get::<_, String>(0))? {
+                for tag in decode_tags(Some(&encoded?)) {
+                    *counts.entry(tag).or_insert(0) += 1;
+                }
+            }
+            let mut list: Vec<(String, i64)> = counts.into_iter().collect();
+            list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            Ok(list)
         })
         .await
     }
@@ -421,7 +494,7 @@ impl Db {
             if current.is_some_and(|note| !note.trim().is_empty()) {
                 return Ok(None);
             }
-            upsert(conn, &domain, Some(&note), None)?;
+            upsert(conn, &domain, Some(&note), None, None)?;
             Ok(Some(note))
         })
         .await
@@ -433,7 +506,7 @@ impl Db {
         self.with_conn(move |conn| {
             let tx = conn.unchecked_transaction()?;
             for (domain, note) in &notes {
-                upsert(&tx, domain, Some(note), None)?;
+                upsert(&tx, domain, Some(note), None, None)?;
                 cleanup(&tx, domain)?;
             }
             tx.commit()?;
@@ -944,28 +1017,64 @@ fn write_research(conn: &Connection, domain: &str, research: &str) -> Result<()>
     Ok(())
 }
 
-/// 1行を書く。`note` / `reviewed` は `None` の項目を触らない ——
-/// 「メモだけ保存」と「確認済みにする」が互いの値を巻き込まないようにするため。
+/// 1行を書く。`note` / `reviewed` / `tags` は `None` の項目を触らない ——
+/// 「メモだけ保存」と「確認済みにする」と「タグを付ける」が互いの値を巻き込まないようにするため。
 fn upsert(
     conn: &Connection,
     domain: &str,
     note: Option<&str>,
     reviewed: Option<bool>,
+    tags: Option<&[String]>,
 ) -> rusqlite::Result<()> {
     let updated_at = chrono::Local::now().to_rfc3339();
+    let tags = tags.map(encode_tags);
     conn.execute(
-        "INSERT INTO domain_notes (domain, updated_at, note, reviewed)
-         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0))
+        "INSERT INTO domain_notes (domain, updated_at, note, reviewed, tags)
+         VALUES (?1, ?2, COALESCE(?3, ''), COALESCE(?4, 0), COALESCE(?5, '[]'))
          ON CONFLICT(domain) DO UPDATE SET
              updated_at = excluded.updated_at,
              note       = COALESCE(?3, domain_notes.note),
-             reviewed   = COALESCE(?4, domain_notes.reviewed)",
-        rusqlite::params![domain, updated_at, note, reviewed],
+             reviewed   = COALESCE(?4, domain_notes.reviewed),
+             tags       = COALESCE(?5, domain_notes.tags)",
+        rusqlite::params![domain, updated_at, note, reviewed, tags],
     )?;
     Ok(())
 }
 
-/// 何も持たなくなった行を消す(未確認 + メモ空)。
+/// タグの列の形は JSON の配列(`["YouTube","Google"]`)。区切り文字で繋ぐと、
+/// 名前に区切りが混ざったときに壊れる(設定の `AiChoice` と同じ理由)。
+fn encode_tags(tags: &[String]) -> String {
+    serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// 読めない値は空にする(画面から付け直せる)。
+fn decode_tags(encoded: Option<&str>) -> Vec<String> {
+    encoded
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .map(normalize_tags)
+        .unwrap_or_default()
+}
+
+/// 1つのタグの長さの上限(文字数)。行に札として並べるので、長いと一覧が読めなくなる
+pub const TAG_MAX_CHARS: usize = 40;
+/// 1つのドメインに付けられるタグの数の上限
+pub const TAGS_MAX_PER_DOMAIN: usize = 20;
+
+/// 空白を落とし、重複を除き、上限で切る。順番は保つ(付けた順に並べるため)。
+/// 書き込む側も読む側もここを通す —— どちらか片方だけだと、古い行の形が違ったときに
+/// 画面に同じタグが2つ並ぶ。
+pub fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    tags.into_iter()
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|t| t.chars().take(TAG_MAX_CHARS).collect::<String>())
+        .filter(|t| !t.is_empty())
+        .filter(|t| seen.insert(t.clone()))
+        .take(TAGS_MAX_PER_DOMAIN)
+        .collect()
+}
+
+/// 何も持たなくなった行を消す(未確認 + メモ空 + タグ無し)。
 /// 残しても害は無いが、`/api/domains` が件数0の行として一覧に足してしまう。
 fn cleanup(conn: &Connection, domain: &str) -> rusqlite::Result<()> {
     // 調査結果が入っている行は消さない。 メモが空でも、30秒かけて調べた結果は
@@ -973,7 +1082,8 @@ fn cleanup(conn: &Connection, domain: &str) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM domain_notes
          WHERE domain = ?1 AND reviewed = 0
-           AND COALESCE(TRIM(note), '') = '' AND COALESCE(TRIM(research), '') = ''",
+           AND COALESCE(TRIM(note), '') = '' AND COALESCE(TRIM(research), '') = ''
+           AND COALESCE(tags, '') IN ('', '[]')",
         [domain],
     )?;
     Ok(())
@@ -1023,8 +1133,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         tracing::info!("domain_notes の verdict 列を削除した(状態は確認済みだけになった)");
     }
 
-    // 「詳しく調べる」の結果はメモと別に持つ（この列より前のDBには無い）
-    for column in ["research", "researched_at"] {
+    // 「詳しく調べる」の結果はメモと別に持つ（この列より前のDBには無い）。
+    // 分類のタグ(`tags`。JSON の配列)も同じく後から足した列
+    for column in ["research", "researched_at", "tags"] {
         if !column_exists(conn, "domain_notes", column)? {
             conn.execute_batch(&format!("ALTER TABLE domain_notes ADD COLUMN {column} TEXT"))
                 .with_context(|| format!("{column}列を追加できない"))?;

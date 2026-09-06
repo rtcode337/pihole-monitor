@@ -83,6 +83,15 @@
   <a class="mode-btn" id="mode-live" href="#blocked/live">1件ずつ流す</a>
 </div>
 
+<!-- タグで絞り込む。付いているタグがあるときだけ出す（無いときに空の選択肢を並べない）。
+     選択肢は「いま一覧に出ている行に付いているタグ」と件数（app.js が組む）。
+     行の札を押しても同じところへ入る -->
+<div class="tagbar" id="tagbar" hidden>
+  <label for="tag-filter">タグ</label>
+  <select id="tag-filter" onchange="setTag(this.value === '*' ? null : this.value)"></select>
+  <button class="action-btn cancel-btn tag-clear" id="tag-clear" onclick="setTag(null)">解除</button>
+</div>
+
 <!-- 一覧の前置き。「どこまで見えているか」を必ず添える ——
      監視は、貯まっていない時期の「0件」を平穏だと読み違えないため。
      ブロック済みは、件数（Pi-holeの集計）とアクセス元・期間（貯めたクエリ）で
@@ -111,6 +120,9 @@
   </label>
   <span class="select-count" id="select-count">0 件選択</span>
   <button class="action-btn ok-btn" id="select-review-btn" onclick="reviewSelected()" disabled>選択を確認済みに</button>
+  <!-- 分類の主な使い方は「同じアプリのドメインを何行か選んで同じ名前を付ける」なので、
+       まとめて付ける入口をここに置く（付いているタグに足す。外すのはメモの画面から） -->
+  <button class="action-btn review-btn" id="select-tag-btn" onclick="openTagModal()" disabled>選択にタグ</button>
   <button class="action-btn cancel-btn" id="select-clear-btn" onclick="clearSelection()" disabled>選択を解除</button>
   <!-- 「まとめて聞く → 更新」の順（実行 → 読み直し）。聞く相手は設定のページで選ぶ -->
   <button class="bulk-btn" onclick="openBulkModal()" title="メモが空のドメインのメモをまとめてAIに生成する">一括AIメモ生成</button>
@@ -264,6 +276,24 @@
     <!-- 閉じるのは見出しの右上の×だけ（下の列に「閉じる」を重ねない） -->
     <div class="modal-actions">
       <button class="action-btn confirm-btn" id="bulk-run-btn" onclick="runBulkAsk()">実行</button>
+    </div>
+  </div>
+</div>
+
+<!-- タグを付ける。詳細画面から開くと1件の入れ替え、選択のバーから開くと
+     チェックした行への追加（選んだ行ごとに付いているタグが違うので、
+     まとめて付けるときに入れ替えると別の分類まで消える）。中身はJSが組む -->
+<div class="modal-overlay" id="tag-modal" style="display:none" onmousedown="onTagOverlayMouseDown(event)">
+  <div class="modal">
+    <div class="modal-title" id="tag-modal-title">タグ<button class="modal-close" onclick="closeTagModal()" aria-label="閉じる" title="閉じる">&times;</button></div>
+    <div class="modal-domain" id="tag-modal-target"></div>
+    <!-- 候補は使ったことのあるタグ（同じアプリを同じ表記で書き続けるため） -->
+    <input type="text" id="tag-modal-input" class="modal-tags" list="tag-options" autocomplete="off"
+           placeholder="タグ（カンマ区切りで複数）" onkeydown="if (event.key === 'Enter') submitTags()">
+    <datalist id="tag-options"></datalist>
+    <div class="modal-actions">
+      <button class="action-btn cancel-btn" onclick="closeTagModal()">キャンセル</button>
+      <button class="action-btn review-btn" id="tag-modal-submit" onclick="submitTags()">保存</button>
     </div>
   </div>
 </div>

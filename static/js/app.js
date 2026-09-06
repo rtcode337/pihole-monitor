@@ -12,6 +12,12 @@ let allDomains = [];
 // 別に持てば、離れて戻っても積んだ行がそのまま残る
 let liveRows = [];
 let currentFilter = 'new';
+// タグの絞り込み。null = 絞らない、'' = タグ無し、それ以外 = そのタグの行だけ。
+// 未確認 / 確認済み の絞り込みと掛け合わせる（AND）
+let currentTag = null;
+// 使ったことのあるタグ（/api/tags）。付けるときの候補に出す ——
+// 同じアプリを同じ表記で書き続けるため。一覧に出ていないドメインのぶんも含む
+let knownTags = [];
 // 'summary' = Pi-holeが止めたものの集計 / 'live' = 止められたものを1件ずつ流す /
 // 'watch' = 素通りしているものの中の怪しい候補。行の作り・フィルター・選択・
 // まとめて聞く・詳細モーダルはどのモードでもそのまま動く（行が持つ項目が増えるだけ）
@@ -144,6 +150,85 @@ async function loadDomains() {
   } catch(e) {
     showFetchError();
   }
+  loadTags();
+}
+
+// ---- タグ（分類） ----
+// 発生元のアプリまで分かったドメインに名前を付けて、後からまとめて見られるようにする。
+// メモとは別に持つ —— メモは文章で、タグは絞り込みの鍵。文章に埋めると表記が揃わない
+
+async function loadTags() {
+  try {
+    const resp = await fetch('/api/tags');
+    if (!resp.ok) return;
+    const body = await resp.json();
+    knownTags = (body.items || []).map(t => t.tag);
+    renderTagOptions();
+  } catch(e) { /* 候補が出ないだけ。付けること自体はできる */ }
+}
+
+// 候補（datalist）。使ったことのあるタグに、いま一覧に付いているものを足す
+function renderTagOptions() {
+  const tags = new Set(knownTags);
+  for (const d of rows()) for (const t of (d.tags || [])) tags.add(t);
+  document.getElementById('tag-options').innerHTML =
+    [...tags].map(t => `<option value="${escapeHtml(t)}">`).join('');
+}
+
+// 入力欄の文字をタグの並びにする。カンマ（全角も）と読点と改行で区切る
+function splitTags(text) {
+  const seen = new Set();
+  return (text || '').split(/[,、，\n]/)
+    .map(t => t.trim().replace(/\s+/g, ' '))
+    .filter(t => t && !seen.has(t) && seen.add(t));
+}
+
+function matchesTag(d) {
+  if (currentTag === null) return true;
+  const tags = d.tags || [];
+  if (currentTag === '') return tags.length === 0;
+  return tags.includes(currentTag);
+}
+
+function setTag(tag) {
+  currentTag = tag;
+  renderDomains();
+}
+
+// 行の札。押すとそのタグで絞り込む（ボタンなので行の詳細は開かない）
+function tagsHtml(d, onclick = 'setTag(this.dataset.tag)') {
+  const tags = d.tags || [];
+  if (!tags.length) return '';
+  return `<span class="tags">${tags.map(t =>
+    `<button class="tag ${t === currentTag ? 'active' : ''}" data-tag="${escapeHtml(t)}" onclick="${onclick}" title="このタグで絞り込む">${escapeHtml(t)}</button>`
+  ).join('')}</span>`;
+}
+
+// 絞り込みの選択肢は「いま一覧に出ている行に付いているタグ」と件数。
+// 付いているタグが無いときは段ごと隠す（空の選択肢を並べない）。
+// 選んでいたタグが一覧から消えたら（モードを替えた等）絞り込みを解く ——
+// 残すと、何も出ない一覧の理由が画面から読めない
+function renderTagFilter() {
+  const counts = new Map();
+  let untagged = 0;
+  for (const d of rows()) {
+    const tags = d.tags || [];
+    if (!tags.length) untagged++;
+    for (const t of tags) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  if (currentTag && !counts.has(currentTag)) currentTag = null;
+  const bar = document.getElementById('tagbar');
+  bar.hidden = counts.size === 0;
+  if (bar.hidden) { currentTag = null; return; }
+  const names = [...counts.keys()].sort((a, b) => a.localeCompare(b, 'ja'));
+  const opt = (value, label, on) => `<option value="${escapeHtml(value)}" ${on ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+  document.getElementById('tag-filter').innerHTML = [
+    opt('*', 'すべて', currentTag === null),
+    opt('', `タグ無し (${untagged})`, currentTag === ''),
+    ...names.map(t => opt(t, `${t} (${counts.get(t)})`, currentTag === t)),
+  ].join('');
+  document.getElementById('tag-clear').disabled = currentTag === null;
+  renderTagOptions();
 }
 
 // unix秒 → datetime-local が受け取る形（ローカル時刻の "YYYY-MM-DDTHH:MM"）。
@@ -354,7 +439,7 @@ function renderFilterState() {
 // いまのフィルターで画面に出ているドメイン。描画と「まとめて聞く」の対象が
 // 同じ1か所から出るようにする（食い違うと、見えていない行にメモが付く）
 function filteredDomains() {
-  const items = rows();
+  const items = rows().filter(matchesTag);
   if (currentFilter === 'new') return items.filter(d => !d.reviewed);
   if (currentFilter === 'reviewed') return items.filter(d => d.reviewed);
   return items;
@@ -534,6 +619,7 @@ function activityHtml(d) {
 
 function renderDomains() {
   const list = document.getElementById('domain-list');
+  renderTagFilter();
   const filtered = filteredDomains();
 
   if (filtered.length === 0) {
@@ -573,7 +659,7 @@ function renderDomains() {
              aria-label="この行を選ぶ">
       <div class="status-dot ${d.reviewed ? 'reviewed' : 'new'}"></div>
       <div class="domain-info">
-        <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button></div>
+        <div class="domain-name">${escapeHtml(d.domain)} <span class="domain-count">(${d.count})</span><button class="copy-btn" data-domain="${escapeHtml(d.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button>${tagsHtml(d)}</div>
         ${reasonsHtml(d)}
         ${activityHtml(d)}
         ${d.note ? `<div class="domain-note">${escapeHtml(d.note)}</div>` : ''}
@@ -780,6 +866,7 @@ function renderSelection(filtered) {
   const count = selectedDomains.size;
   document.getElementById('select-count').textContent = `${count} 件選択`;
   document.getElementById('select-review-btn').disabled = count === 0;
+  document.getElementById('select-tag-btn').disabled = count === 0;
   document.getElementById('select-clear-btn').disabled = count === 0;
   const all = document.getElementById('select-all');
   all.checked = filtered.length > 0 && count === filtered.length;
@@ -821,8 +908,10 @@ function openModal(domain, existingNote = '') {
   pendingDomain = domain;
   document.getElementById('modal-domain').textContent = domain;
   document.getElementById('modal-note').value = existingNote;
-  // 既に確認済みなら「確認済みにする」は出さない（押しても何も変わらないボタンを置かない）
+  // タグはここでは触らない（付けるのは詳細画面の「タグ」から）——
+  // メモを保存するたびに分類まで書き換わると、AIにメモを書かせただけでタグが消える
   const item = rows().find(d => d.domain === domain);
+  // 既に確認済みなら「確認済みにする」は出さない（押しても何も変わらないボタンを置かない）
   const decided = !!(item && item.reviewed);
   document.getElementById('modal-review-btn').hidden = decided;
   document.getElementById('modal').style.display = 'flex';
@@ -913,15 +1002,26 @@ function renderDetail() {
     <div class="detail-meta">
       ${d.reviewed ? reviewedBadge(d) : '<span class="badge unreviewed">未確認</span>'}
       <span>${d.reasons ? '直近' : 'ブロック'} ${d.count.toLocaleString('ja-JP')} 回</span>
+      ${tagsHtml(d, 'filterByTagFromDetail(this.dataset.tag)')}
     </div>
     ${reasonsHtml(d)}
     ${activityHtml(d)}
+    <!-- 調査結果の節は、まだ何も無いときも出す（メモと同じ）—— 節ごと隠すと、
+         このドメインを調べていないのか、そういう欄が無いのかが画面から読めない -->
+    <div class="detail-label detail-label-row">
+      <span>AIの調査結果${d.research && d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
+      ${d.research ? `<button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>` : ''}
+    </div>
+    ${d.research
+      ? `<div class="detail-research">${escapeHtml(d.research)}</div>`
+      : '<div class="detail-research is-empty">まだ調査結果はありません。</div>'}
+    <!-- 「詳しく調べる」はこの節の中に置く（下のボタンの列ではなく）——
+         結果の出る場所と押すところが離れていると、何をすると埋まる欄なのかが読めない -->
+    <div class="research-actions">
+      <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" ${dis}
+              title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（調査結果は入れ替わります）">${AI_ICON} ${askingKind === 'investigate' ? '調べています…' : (d.research ? '詳しく調べ直す' : '詳しく調べる')}</button>
+    </div>
     ${d.research ? `
-      <div class="detail-label detail-label-row">
-        <span>AIの調査結果${d.researched_at ? `<span class="detail-when">${escapeHtml(shortTime(d.researched_at))}</span>` : ''}</span>
-        <button class="copy-btn detail-copy" data-domain="${escapeHtml(d.domain)}" onclick="copyResearch(this)" title="調査結果をコピー">${COPY_ICON}</button>
-      </div>
-      <div class="detail-research">${escapeHtml(d.research)}</div>
       <!-- 調べた結果をもとに、もう一歩聞く。 調査結果のすぐ下に置く ——
            読んで浮かんだ疑問をその場で投げられるのが要点で、離すと入力欄を探すことになる。
            調査結果が無いときは出さない（材料が無い深掘りは「詳しく調べる」の劣化版） -->
@@ -938,21 +1038,28 @@ function renderDetail() {
     </div>
   `;
 
-  // AIに聞く操作はここにしか無い（行には置かない）。閉じるのは見出しの右上の×だけ。 先頭は「メモを書く」（人が書くのが本筋）。 AIは2つ並ぶ ——
-  // 「AIメモ生成」は選んだ全員に同時に聞いて1〜2文のメモを書き直す（まとめて聞いた結果の
-  // 1件だけを聞き直すためのもの）。「詳しく調べる」はメインの1人がweb検索と観測データで深く調べる。
+  // 人が書き込む操作はここにしか無い（行には置かない）。閉じるのは見出しの右上の×だけ。
+  // 先頭は「メモを書く」（人が書くのが本筋）。「AIメモ生成」は選んだ全員に同時に聞いて
+  // 1〜2文のメモを書き直す。「タグ」は分類（発生元のアプリなど）を付け直す。
+  // 「詳しく調べる」はここではなく調査結果の節の中（結果の出る場所と押すところを離さない）。
   // 聞いている間は全部押せない（右上の×も含めて）
   document.getElementById('detail-actions').innerHTML = `
     <button class="action-btn edit-note-btn detail-edit" data-domain="${escapeHtml(d.domain)}" data-note="${escapeHtml(d.note)}" onclick="editNoteFromDetail(this.dataset.domain, this.dataset.note)" ${dis}>${EDIT_ICON} メモを書く</button>
     <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askNote(this.dataset.domain)" ${dis}
             title="選んだ相手全員に同時に聞き、1〜2文のメモを書き直します（すでにメモがあれば置き換えます）">${AI_ICON} ${askingKind === 'note' ? 'AIメモ生成中…' : 'AIメモ生成'}</button>
-    <button class="action-btn ask-ai-btn" data-domain="${escapeHtml(d.domain)}" onclick="askOne(this.dataset.domain)" ${dis}
-            title="メインのAIが、web検索とPi-holeの観測データからこのドメインを詳しく調べます（調査結果は入れ替わります）">${AI_ICON} ${askingKind === 'investigate' ? '調べています…' : (d.research ? '詳しく調べ直す' : '詳しく調べる')}</button>
+    <button class="action-btn review-btn" data-domain="${escapeHtml(d.domain)}" onclick="openTagModal(this.dataset.domain)" ${dis}
+            title="発生元のアプリなどで分類します（付いているタグを入れ替えます）">タグ</button>
     ${d.reviewed
       ? `<button class="action-btn unreview-btn" data-domain="${escapeHtml(d.domain)}" onclick="unmarkReviewed(this.dataset.domain)" ${dis}>未確認に戻す</button>`
       : `<button class="action-btn ok-btn" data-domain="${escapeHtml(d.domain)}" onclick="markReviewed(this.dataset.domain)" ${dis}>確認済みにする</button>`
     }
   `;
+}
+
+// 詳細の札を押したら詳細を閉じて一覧を絞る（絞った結果は詳細の後ろにあって見えない）
+function filterByTagFromDetail(tag) {
+  closeDetailModal();
+  setTag(tag);
 }
 
 // メモの編集は既存のモーダルに渡す。詳細は先に閉じる ——
@@ -1804,6 +1911,7 @@ function renderNotes(body) {
       <div class="note-item-head">
         <span class="note-domain">${escapeHtml(n.domain)}</span>
         <span class="badge ${n.reviewed ? 'reviewed' : 'unreviewed'}">${n.reviewed ? '確認済' : '未確認'}</span>
+        ${(n.tags || []).length ? `<span class="tags">${n.tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</span>` : ''}
         <span class="note-when">${escapeHtml(shortTime(n.updated_at))}</span>
         <button class="copy-btn" data-domain="${escapeHtml(n.domain)}" onclick="copyDomain(this)" title="コピー">${COPY_ICON}</button>
       </div>
@@ -2186,7 +2294,8 @@ async function submitNote() {
   await saveNote(domain, note, `${domain} のメモを保存しました`);
 }
 
-// メモをサーバへ書き、手元の一覧にも反映する（一覧を読み直さずに済ませる）
+// メモをサーバへ書き、手元の一覧にも反映する（一覧を読み直さずに済ませる）。
+// タグは送らない（サーバ側が「渡されなければ触らない」ので、付いている分類は残る）
 async function saveNote(domain, note, successMessage) {
   try {
     const resp = await fetch('/api/note', {
@@ -2196,7 +2305,7 @@ async function saveNote(domain, note, successMessage) {
     });
     const result = await resp.json();
     if (result.success) {
-      updateDomainRows(domain, {note: note});
+      updateDomainRows(domain, {note});
       renderDomains();
       showToast(successMessage, 'success');
       return true;
@@ -2222,13 +2331,99 @@ async function submitReview() {
     });
     const result = await resp.json();
     if (result.success) {
-      updateDomainRows(domain, {reviewed: true, note: note});
+      updateDomainRows(domain, {reviewed: true, note});
       updateStats();
       renderDomains();
       showToast(`${domain} を確認済みにしました`, 'success');
     } else {
       showToast('失敗しました', 'error');
     }
+  } catch(e) {
+    showToast('エラーが発生しました', 'error');
+  }
+}
+
+// 付けたタグを候補に足す（読み直さずに次の入力で出るように）
+function rememberTags(tags) {
+  for (const t of (tags || [])) if (!knownTags.includes(t)) knownTags.push(t);
+  renderTagOptions();
+}
+
+// ---- タグを付ける ----
+// 入口は2つで、書き方が違う ——
+// 詳細画面の「タグ」は**1件の入れ替え**（付け直しも、外すのもここ）。
+// 選択のバーの「選択にタグ」は**チェックした行への追加** ——
+// 選んだ行ごとに付いているタグが違うので、入れ替えだと別の分類まで消える。
+
+// いまタグを付けようとしている相手。モーダルのDOMではなくここに持つ
+// （選択は再描画で変わりうるので、開いた時点の相手を固定する）
+let tagTargets = [];
+// 入れ替えるか（1件のとき）、足すか（まとめてのとき）
+let tagAdd = false;
+
+// `domain` を渡すと1件の入れ替え、省略するとチェックした行への追加
+function openTagModal(domain) {
+  const domains = domain ? [domain] : [...selectedDomains];
+  if (!domains.length) return;
+  // 詳細から開いたときは詳細を閉じる（覆いを2枚重ねない。メモと同じ流儀）
+  if (domain && detailDomain) closeDetailModal();
+  tagTargets = domains;
+  tagAdd = !domain;
+  const item = domain ? rows().find(d => d.domain === domain) : null;
+  document.getElementById('tag-modal-title').firstChild.textContent =
+    tagAdd ? '選択にタグを付ける' : 'タグ';
+  document.getElementById('tag-modal-target').textContent = tagAdd
+    ? `${domains.length} 件のドメインに付けます（付いているタグには足します）`
+    : domain;
+  // 1件のときは付いているタグを入れておく（消せば外れる）
+  document.getElementById('tag-modal-input').value =
+    tagAdd ? '' : ((item && item.tags) || []).join(', ');
+  document.getElementById('tag-modal-submit').textContent = tagAdd ? '付ける' : '保存';
+  document.getElementById('tag-modal').style.display = 'flex';
+  document.getElementById('tag-modal-input').focus();
+}
+
+function closeTagModal() {
+  document.getElementById('tag-modal').style.display = 'none';
+  tagTargets = [];
+}
+
+function onTagOverlayMouseDown(event) {
+  if (event.target === document.getElementById('tag-modal')) closeTagModal();
+}
+
+async function submitTags() {
+  const domains = tagTargets;
+  const add = tagAdd;
+  const tags = splitTags(document.getElementById('tag-modal-input').value);
+  // 足すのに何も書かれていなければ何もしない（入れ替えのときの空は「全部外す」）
+  if (!domains.length || (add && !tags.length)) return;
+  closeTagModal();
+  try {
+    const resp = await fetch('/api/tags', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({domains, tags, add})
+    });
+    const result = await resp.json();
+    if (result.success) {
+      // サーバと同じ書き方で手元も更新する（一覧を読み直さずに済ませる）
+      for (const item of [...allDomains, ...liveRows]) {
+        if (!domains.includes(item.domain)) continue;
+        if (!add) { item.tags = [...tags]; continue; }
+        const merged = [...(item.tags || [])];
+        for (const t of tags) if (!merged.includes(t)) merged.push(t);
+        item.tags = merged;
+      }
+      rememberTags(tags);
+      if (add) selectedDomains.clear();
+      renderDomains();
+      showToast(add
+        ? `${result.count || domains.length} 件にタグを付けました`
+        : `${domains[0]} のタグを保存しました`, 'success');
+      return;
+    }
+    showToast('タグを保存できませんでした', 'error');
   } catch(e) {
     showToast('エラーが発生しました', 'error');
   }
@@ -2242,7 +2437,7 @@ function showToast(msg, type) {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiNotice(); closeBulkModal(); }
+  if (e.key === 'Escape') { closeModal(); closeDetailModal(); closeAiNotice(); closeBulkModal(); closeTagModal(); }
   if (e.key === 'Enter' && e.ctrlKey) {
     if (document.getElementById('modal').style.display !== 'none') submitNote();
     // 詳細の追加質問。書きかけがあるときだけ（開いているだけで反応させない）

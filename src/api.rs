@@ -16,7 +16,7 @@ use tokio_stream::{StreamExt, iter as stream_iter};
 use crate::ai::{
     Ai, AiChoice, AskError, AskMode, CLI_BACKEND, CLI_LABEL, MAX_DOMAINS_PER_ASK,
 };
-use crate::db::{ClientActivity, Db};
+use crate::db::{ClientActivity, Db, normalize_tags};
 use crate::diag::Event as DiagEvent;
 use crate::pihole::{PiholeClient, QueryRecord};
 
@@ -43,6 +43,8 @@ pub fn router() -> Router<AppState> {
         // メモは確認済みと独立している。 確認済みにしないと残せないと、
         // 「まだ判断していないが調べた内容は残したい」が表せない
         .route("/api/note", post(note_post))
+        // タグ。一覧(付いているタグと件数)と、付ける(1件でもまとめてでも)
+        .route("/api/tags", get(tags_get).post(tags_post))
         // 口は1つ。 詳細の「AIに聞く」(1件)も「まとめて聞く」(区切って何度も)も同じここを通り、
         // どちらも結果をメモとして保存する —— 1件用の口を別に持つと、指示文と保存の仕方が
         // 2か所に分かれる
@@ -93,6 +95,8 @@ struct DomainEntry {
     /// 「詳しく調べる」の結果。メモとは別（詳細画面でメモの上に出す）
     research: String,
     researched_at: String,
+    /// 分類のタグ(発生元のアプリ名など)
+    tags: Vec<String>,
     /// ブロックされた通信を出した端末（件数の多い順）。1台ずつ件数と期間を持つ ——
     /// 画面は「期間 アクセス元 (件数)」を1行ずつ出す。出どころは貯めたクエリで、
     /// 件数（Pi-hole の集計）とは範囲が違う —— 画面が前置きでそう断っている
@@ -371,6 +375,8 @@ struct ReviewRequest {
     /// 省略したらメモは触らない。 一括で確認済みにするときに、
     /// 既に付いているメモ(AIに聞いた結果)を空で上書きしないため。
     note: Option<String>,
+    /// 分類のタグ。省略したら触らない(メモと同じ理由)
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -478,6 +484,7 @@ async fn domains(State(state): State<AppState>) -> Response {
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
+                tags: record.map(|r| r.tags.clone()).unwrap_or_default(),
                 clients: Vec::new(),
                 active_from: 0,
                 active_to: 0,
@@ -580,6 +587,7 @@ struct LiveEntry {
     note: String,
     research: String,
     researched_at: String,
+    tags: Vec<String>,
     /// その通信を出した1台だけ。一覧のように「件数の多い順に何台も」ではない
     clients: Vec<ClientActivity>,
     active_from: i64,
@@ -663,6 +671,7 @@ async fn live(State(state): State<AppState>, Query(q): Query<LiveQuery>) -> Resp
                 note: record.map(|rec| rec.note.clone()).unwrap_or_default(),
                 research: record.map(|rec| rec.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|rec| rec.researched_at.clone()).unwrap_or_default(),
+                tags: record.map(|rec| rec.tags.clone()).unwrap_or_default(),
                 clients: vec![ClientActivity {
                     client: r.client.clone(),
                     count: 1,
@@ -807,7 +816,8 @@ async fn review_post(State(state): State<AppState>, Json(req): Json<ReviewReques
         return bad_request("domains required");
     }
     let count = domains.len();
-    match state.db.set_reviewed(domains, true, req.note).await {
+    let tags = req.tags.map(normalize_tags);
+    match state.db.set_reviewed(domains, true, req.note, tags).await {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "確認済みにできない"),
     }
@@ -820,20 +830,69 @@ async fn review_delete(State(state): State<AppState>, Json(req): Json<ReviewRequ
         return bad_request("domains required");
     }
     let count = domains.len();
-    match state.db.set_reviewed(domains, false, None).await {
+    match state.db.set_reviewed(domains, false, None, None).await {
         Ok(()) => reviewed_count(count),
         Err(e) => internal_error(e, "未確認に戻せない"),
     }
 }
 
-/// メモだけ保存する(確認済みかどうかは変えない)。
+/// メモ(とタグ)だけ保存する(確認済みかどうかは変えない)。
 async fn note_post(State(state): State<AppState>, Json(req): Json<ReviewRequest>) -> Response {
     let Some(domain) = clean(req.domains).into_iter().next() else {
         return bad_request("domains required");
     };
-    match state.db.save_note(domain, req.note.unwrap_or_default()).await {
+    let tags = req.tags.map(normalize_tags);
+    match state
+        .db
+        .save_note(domain, req.note.unwrap_or_default(), tags)
+        .await
+    {
         Ok(()) => success(),
         Err(e) => internal_error(e, "メモを保存できない"),
+    }
+}
+
+#[derive(Deserialize)]
+struct TagsRequest {
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    /// `true` なら既にあるタグに足す(チェックした行にまとめて付けるとき)。
+    /// 省略時は入れ替え(メモの画面から付け直すとき)
+    #[serde(default)]
+    add: bool,
+}
+
+/// 使われているタグと件数。付けるときの候補と、一覧の絞り込みの選択肢に使う。
+async fn tags_get(State(state): State<AppState>) -> Response {
+    match state.db.tag_counts().await {
+        Ok(list) => Json(json!({
+            "items": list
+                .into_iter()
+                .map(|(tag, count)| json!({ "tag": tag, "count": count }))
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => internal_error(e, "タグの一覧を読み出せない"),
+    }
+}
+
+/// タグを付ける(1件でもまとめてでも)。確認済みかどうかもメモも変えない。
+/// 空のタグで入れ替えると外れる(タグ無しになった未確認・メモ無しの行は消える)。
+async fn tags_post(State(state): State<AppState>, Json(req): Json<TagsRequest>) -> Response {
+    let domains = clean(req.domains);
+    if domains.is_empty() {
+        return bad_request("domains required");
+    }
+    let tags = normalize_tags(req.tags);
+    if req.add && tags.is_empty() {
+        return bad_request("tags required");
+    }
+    let count = domains.len();
+    match state.db.set_tags(domains, tags, req.add).await {
+        Ok(()) => reviewed_count(count),
+        Err(e) => internal_error(e, "タグを保存できない"),
     }
 }
 

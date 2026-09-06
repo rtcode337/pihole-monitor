@@ -274,6 +274,8 @@ pub struct WatchItem {
     /// 「詳しく調べる」の結果（詳細画面でメモの上に出す）
     pub research: String,
     pub researched_at: String,
+    /// 分類のタグ(発生元のアプリ名など)
+    pub tags: Vec<String>,
     pub reasons: Vec<Reason>,
     /// この窓で引いた端末(分かる範囲。件数の多い順)。1台ずつ件数と期間を持つ
     pub clients: Vec<ClientActivity>,
@@ -444,6 +446,7 @@ pub async fn candidates(db: &Db, now: f64, pihole_url: &str) -> Result<WatchResu
                 note: record.map(|r| r.note.clone()).unwrap_or_default(),
                 research: record.map(|r| r.research.clone()).unwrap_or_default(),
                 researched_at: record.map(|r| r.researched_at.clone()).unwrap_or_default(),
+                tags: record.map(|r| r.tags.clone()).unwrap_or_default(),
                 reasons,
                 clients: seen.clients,
                 domain,
